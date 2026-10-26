@@ -1,0 +1,13 @@
+{
+  "name": "police-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Minimal Render API starter for the PD registry",
+  "type": "module",
+  "engines": {
+    "node": ">=22 <25"
+  },
+  "scripts": {
+    "start": "node server.js"
+  }
+}
