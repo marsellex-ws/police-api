@@ -2,11 +2,12 @@ import http from 'node:http';
 import { pathToFileURL } from 'node:url';
 
 const DEFAULT_ORIGINS = ['https://marsellex.ru', 'https://www.marsellex.ru'];
-const PUBLIC_COLUMNS = 'id,department,nickname,account_number,punishment_type,article,reason,evidence_url,issued_by,status,issued_at,paid_at,paid_by,created_at,updated_at,version';
+const PUBLIC_COLUMNS = 'id,department,nickname,account_number,punishment_type,article,reason,evidence_url,issued_by,redemption_type,redemption_proof_url,redemption_proof_label,status,issued_at,paid_at,paid_by,created_at,updated_at,version';
 const DEPARTMENTS = new Set(['LSPD', 'SFPD', 'LVPD']);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const REDEMPTION_TYPES = new Set(['none', 'payment', 'duty', 'conversation', 'demotion', 'other']);
 const SEARCH_RE = /^[\p{L}\p{N}_.\- ]{1,100}$/u;
-const EDITABLE = ['nickname','account_number','punishment_type','article','reason','evidence_url','issued_by'];
+const EDITABLE = ['nickname','account_number','punishment_type','article','reason','evidence_url','issued_by','redemption_type','redemption_proof_url','redemption_proof_label'];
 
 class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -75,18 +76,26 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
 
   function validateFields(input, create) {
     const out = {};
-    const maxLengths = { nickname: 100, account_number: 64, punishment_type: 120, article: 100, reason: 2000, evidence_url: 2000, issued_by: 100 };
+    const maxLengths = { nickname: 100, account_number: 64, punishment_type: 120, article: 100, reason: 2000, evidence_url: 2000, issued_by: 100, redemption_type: 32, redemption_proof_url: 2000, redemption_proof_label: 100 };
     for (const key of EDITABLE) {
       if (!create && !Object.hasOwn(input, key)) continue;
       const mandatory = ['nickname','account_number','punishment_type','issued_by'].includes(key);
       const value = textField(input[key], maxLengths[key], { mandatory });
       if (mandatory && value === '') throw new HttpError(400, 'Required field cannot be empty');
-      out[key] = value === null ? (key === 'evidence_url' ? null : '') : value;
+      out[key] = value === null || (value === '' && (key.endsWith('_url') || key === 'redemption_proof_label')) ? (key.endsWith('_url') || key === 'redemption_proof_label' ? null : key === 'redemption_type' ? 'none' : '') : value;
+      if (key === 'redemption_proof_label' && out[key] === '') out[key] = null;
     }
-    if (out.evidence_url) {
+    for (const field of ['evidence_url', 'redemption_proof_url']) {
+      if (!out[field]) continue;
       let value;
-      try { value = new URL(out.evidence_url); } catch { throw new HttpError(400, 'Evidence must be an HTTPS URL'); }
-      if (value.protocol !== 'https:' || !value.hostname || value.username || value.password) throw new HttpError(400, 'Evidence must be an HTTPS URL');
+      try { value = new URL(out[field]); } catch { throw new HttpError(400, 'Link must be an HTTPS URL'); }
+      if (value.protocol !== 'https:' || !value.hostname || value.username || value.password) throw new HttpError(400, 'Link must be an HTTPS URL');
+    }
+    if (Object.hasOwn(out, 'redemption_type') && !REDEMPTION_TYPES.has(out.redemption_type)) throw new HttpError(400, 'Invalid redemption type');
+    if (Object.hasOwn(out, 'redemption_proof_url') || Object.hasOwn(out, 'redemption_proof_label')) {
+      if (create || Object.hasOwn(out, 'redemption_proof_url') && Object.hasOwn(out, 'redemption_proof_label')) {
+        if (Boolean(out.redemption_proof_url) !== Boolean(out.redemption_proof_label)) throw new HttpError(400, 'Proof link and title must be provided together');
+      }
     }
     return out;
   }
@@ -223,9 +232,14 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
         let patch;
         if (action === 'update') {
           patch = validateFields(input, false);
+          if (Object.hasOwn(patch,'redemption_proof_url') !== Object.hasOwn(patch,'redemption_proof_label')) throw new HttpError(400, 'Proof link and title must be provided together');
           if (!Object.keys(patch).length) throw new HttpError(400, 'Nothing to update');
         } else if (action === 'pay') {
           patch = { status: 'paid', paid_at: new Date().toISOString(), paid_by: user.login };
+          const proof = validateFields(Object.fromEntries(['redemption_type','redemption_proof_url','redemption_proof_label'].filter(k => Object.hasOwn(input,k)).map(k => [k,input[k]])), false);
+          if (Object.hasOwn(proof, 'redemption_proof_url') !== Object.hasOwn(proof, 'redemption_proof_label')) throw new HttpError(400, 'Proof link and title must be provided together');
+          if (Object.hasOwn(proof, 'redemption_proof_url') && Boolean(proof.redemption_proof_url) !== Boolean(proof.redemption_proof_label)) throw new HttpError(400, 'Proof link and title must be provided together');
+          Object.assign(patch, proof);
         } else if (action === 'cancel') {
           patch = { status: 'cancelled' };
         } else {
