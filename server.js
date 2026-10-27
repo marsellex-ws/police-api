@@ -1,6 +1,12 @@
 import http from 'node:http';
+import { randomBytes, createHash, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
+import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
 
+const scrypt = promisify(scryptCallback);
+const SITE_ROLES = new Set(['admin','minister','leader','senior']);
+const ROLE_DEPARTMENTS = new Set(['LSPD','SFPD','LVPD']);
+const LOGIN_RE = /^[a-z][a-z0-9_]{2,31}$/;
 const DEFAULT_ORIGINS = ['https://marsellex.ru', 'https://www.marsellex.ru'];
 const PUBLIC_COLUMNS = 'id,department,nickname,account_number,punishment_type,article,reason,evidence_url,issued_by,redemption_type,redemption_proof_url,redemption_proof_label,status,issued_at,paid_at,paid_by,created_at,updated_at,version';
 const DEPARTMENTS = new Set(['LSPD', 'SFPD', 'LVPD']);
@@ -54,11 +60,14 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
     if (!req.headers['content-type']?.toLowerCase().startsWith('application/json')) {
       throw new HttpError(415, 'Content-Type must be application/json');
     }
-    let text = '';
+    let size = 0;
+    const chunks = [];
     for await (const chunk of req) {
-      text += chunk.toString('utf8');
-      if (Buffer.byteLength(text, 'utf8') > maxBytes) throw new HttpError(413, 'Request body too large');
+      size += chunk.length;
+      if (size > maxBytes) throw new HttpError(413, 'Request body too large');
+      chunks.push(chunk);
     }
+    const text = Buffer.concat(chunks).toString('utf8');
     let parsed;
     try { parsed = JSON.parse(text); } catch { throw new HttpError(400, 'Invalid JSON'); }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new HttpError(400, 'JSON object expected');
@@ -100,22 +109,48 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
     return out;
   }
 
+  const hashToken = token => createHash('sha256').update(token).digest('hex');
+
+  async function hashPassword(password) {
+    const salt = randomBytes(16).toString('hex');
+    const derived = await scrypt(password, Buffer.from(salt,'hex'), 64, { N:16384, r:8, p:1 });
+    return `scrypt$${salt}$${derived.toString('hex')}`;
+  }
+  async function passwordMatches(password, stored) {
+    const pieces = String(stored || '').split('$');
+    if (pieces.length !== 3 || pieces[0] !== 'scrypt' || !/^[0-9a-f]{32}$/.test(pieces[1]) || !/^[0-9a-f]{128}$/.test(pieces[2])) return false;
+    const derived = await scrypt(password, Buffer.from(pieces[1],'hex'), 64, { N:16384, r:8, p:1 });
+    return timingSafeEqual(derived, Buffer.from(pieces[2],'hex'));
+  }
   function tokenFrom(req) {
     const match = /^Bearer ([0-9a-f]{64})$/i.exec(req.headers.authorization || '');
-    if (!match) throw new HttpError(401, 'World Script session is required');
-    return match[1];
+    if (!match) throw new HttpError(401, 'Sign in required');
+    return match[1].toLowerCase();
+  }
+  async function identity(req) {
+    const q = new URLSearchParams({select:'user_id',token_hash:`eq.${hashToken(tokenFrom(req))}`,expires_at:`gt.${new Date().toISOString()}`,limit:'1'});
+    const sessions = await supabase('GET',`pd_site_sessions?${q}`);
+    if (!sessions?.length) throw new HttpError(401,'Session expired');
+    const uid = sessions[0].user_id;
+    const u = await supabase('GET',`pd_site_users?${new URLSearchParams({select:'id,login,nickname,disabled',id:`eq.${uid}`,limit:'1'})}`);
+    if (!u?.length || u[0].disabled) throw new HttpError(401,'Account unavailable');
+    const rr = await supabase('GET',`pd_site_roles?${new URLSearchParams({select:'role,department',user_id:`eq.${uid}`,limit:'1'})}`);
+    const role = rr?.[0]?.role || null;
+    const roleDepartment = rr?.[0]?.department || null;
+    const all = role === 'admin' || role === 'minister';
+    const editable = all ? [...DEPARTMENTS] : (role === 'leader' || role === 'senior') && DEPARTMENTS.has(roleDepartment) ? [roleDepartment] : [];
+    return { id:uid, login:u[0].login, nickname:u[0].nickname, role, role_department:roleDepartment, department:roleDepartment || '', is_admin:role==='admin', editable_departments:editable };
   }
 
-  async function identity(req) {
-    const token = tokenFrom(req);
-    const result = await rpc('ws_admin_access_state', { p_ws_session_token: token });
-    if (!result || Number(result.ok) !== 1 || typeof result.login !== 'string') throw new HttpError(401, 'Session expired');
-    const login = result.login.trim().toLowerCase();
-    const q = new URLSearchParams({ select: 'department,role', ws_login: `eq.${login}` });
-    const roles = await supabase('GET', `pd_access?${q.toString()}`);
-    const isAdmin = roles.some(x => x.role === 'admin' && x.department === 'ALL');
-    const departments = isAdmin ? [...DEPARTMENTS] : roles.filter(x => x.role === 'editor' && DEPARTMENTS.has(x.department)).map(x => x.department);
-    return { login, nickname: result.nickname || result.login, department: result.department || '', is_admin: isAdmin, editable_departments: departments };
+  function requireManager(user) {
+    if (!['admin','minister','leader'].includes(user.role)) throw new HttpError(403,'Access denied');
+  }
+  async function publicUsers(ids) {
+    const unique = [...new Set(ids.filter(x=>UUID_RE.test(x)))];
+    if (!unique.length) return new Map();
+    const q = new URLSearchParams({select:'id,login,nickname',id:`in.(${unique.join(',')})`,limit:String(Math.min(100,unique.length))});
+    const people = await supabase('GET',`pd_site_users?${q}`);
+    return new Map(people.map(person=>[person.id,person]));
   }
 
   function canEdit(identity, dept) {
@@ -166,28 +201,114 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
         return send(res, 200, { ok: true, service: 'police-api', database_configured: Boolean(env.SUPABASE_SECRET_KEY && env.SUPABASE_URL) });
       }
 
+      if (req.method === 'POST' && url.pathname === '/api/auth/register') {
+        limitLogin(req);
+        const input = await bodyJson(req, 2048);
+        const login = String(input.login || '').trim().toLowerCase();
+        const nickname = textField(input.nickname, 70, {mandatory:true});
+        const password = input.password;
+        if (!LOGIN_RE.test(login) || nickname.length < 2 || typeof password !== 'string' || password.length < 10 || password.length > 128) {
+          throw new HttpError(400,'Invalid account details');
+        }
+        const exists = await supabase('GET',`pd_site_users?${new URLSearchParams({select:'id',login:`eq.${login}`,limit:'1'})}`);
+        if (exists.length) throw new HttpError(409,'Username is taken');
+        const password_hash = await hashPassword(password);
+        await supabase('POST','pd_site_users',{login,nickname,password_hash},{prefer:'return=minimal'});
+        return send(res,201,{ok:true});
+      }
       if (req.method === 'POST' && url.pathname === '/api/auth/login') {
         limitLogin(req);
         const input = await bodyJson(req, 2048);
-        const login = textField(input.login, 100, { mandatory: true });
+        const login = String(input.login || '').trim().toLowerCase();
         const password = input.password;
-        if (typeof password !== 'string' || password.length < 1 || password.length > 256) throw new HttpError(400, 'Invalid password');
-        const result = await rpc('ws_profile_login', { p_login: login, p_password: password });
-        if (!result || Number(result.ok) !== 1 || !/^[a-f0-9]{64}$/i.test(result.session_token || '')) {
-          return send(res, 401, { ok: false, error: 'Invalid login or password' });
+        if (!LOGIN_RE.test(login) || typeof password !== 'string' || password.length > 128) throw new HttpError(401,'Invalid login or password');
+        const query = new URLSearchParams({select:'id,login,nickname,password_hash,disabled',login:`eq.${login}`,limit:'1'});
+        const profiles = await supabase('GET',`pd_site_users?${query}`);
+        if (!profiles.length || profiles[0].disabled || !(await passwordMatches(password,profiles[0].password_hash))) {
+          throw new HttpError(401,'Invalid login or password');
         }
-        return send(res, 200, { ok: true, session_token: result.session_token, login: result.login, nickname: result.nickname, department: result.department });
+        const token = randomBytes(32).toString('hex');
+        await supabase('POST','pd_site_sessions',{
+          token_hash:hashToken(token),user_id:profiles[0].id,expires_at:new Date(Date.now()+12*3600000).toISOString()
+        },{prefer:'return=minimal'});
+        return send(res,200,{ok:true,session_token:token});
       }
-
       if (req.method === 'GET' && url.pathname === '/api/auth/me') {
         const user = await identity(req);
-        return send(res, 200, { ok: true, user });
+        return send(res,200,{ok:true,user});
       }
-
       if (req.method === 'POST' && url.pathname === '/api/auth/logout') {
         const token = tokenFrom(req);
-        await rpc('ws_profile_logout', { p_session_token: token });
-        return send(res, 200, { ok: true });
+        await supabase('DELETE',`pd_site_sessions?${new URLSearchParams({token_hash:`eq.${hashToken(token)}`})}`);
+        return send(res,200,{ok:true});
+      }
+      if (req.method === 'POST' && url.pathname === '/api/site/bootstrap') {
+        limitLogin(req);
+        const user = await identity(req);
+        const input = await bodyJson(req, 1024);
+        const supplied = input.bootstrap_token;
+        const secret = env.PD_BOOTSTRAP_TOKEN || '';
+        if (typeof supplied !== 'string' || secret.length < 32 || supplied.length !== secret.length ||
+            !timingSafeEqual(Buffer.from(supplied), Buffer.from(secret))) {
+          throw new HttpError(403,'Access denied');
+        }
+        const result = await rpc('pd_site_initial_admin',{p_user_id:user.id});
+        if (result !== true) throw new HttpError(409,'Administrator already exists');
+        return send(res,200,{ok:true});
+      }
+      if (req.method === 'GET' && url.pathname === '/api/roles/users') {
+        const user = await identity(req); requireManager(user);
+        const q = String(url.searchParams.get('search') || '').trim().toLowerCase();
+        if (!/^[a-z0-9_]{2,32}$/.test(q)) return send(res,200,{ok:true,items:[]});
+        const params = new URLSearchParams({select:'id,login,nickname',login:`ilike.${q}*`,order:'login.asc',limit:'20'});
+        const people = await supabase('GET',`pd_site_users?${params}`);
+        const ids = people.map(p=>p.id);
+        let roles=[];
+        if(ids.length){ roles=await supabase('GET',`pd_site_roles?${new URLSearchParams({select:'user_id,role,department',user_id:`in.(${ids.join(',')})`})}`); }
+        const map = new Map(roles.map(v=>[v.user_id,v]));
+        return send(res,200,{ok:true,items:people.map(p=>({...p,role:map.get(p.id)?.role || null,department:map.get(p.id)?.department || null}))});
+      }
+      if (req.method === 'GET' && url.pathname === '/api/roles/requests') {
+        const user = await identity(req); requireManager(user);
+        const params = new URLSearchParams({select:'id,requested_by,target_id,requested_role,department,status,admin_approved_by,minister_approved_by,created_at',status:'eq.pending',order:'created_at.desc',limit:'100'});
+        if(user.role==='leader') params.set('requested_by',`eq.${user.id}`);
+        const rows = await supabase('GET',`pd_role_requests?${params}`);
+        const people=await publicUsers(rows.flatMap(r=>[r.requested_by,r.target_id]));
+        return send(res,200,{ok:true,items:rows.map(r=>({
+          ...r,requested_by_user:people.get(r.requested_by)?.nickname || '—',
+          target_user:people.get(r.target_id)?.nickname || '—',
+          target_login:people.get(r.target_id)?.login || ''
+        }))});
+      }
+      if (req.method === 'POST' && url.pathname === '/api/roles/assign') {
+        const user = await identity(req); requireManager(user);
+        const input=await bodyJson(req,2048);
+        const target_id=input.target_id,role=input.role,department=input.department;
+        if(!UUID_RE.test(target_id||'') || !['minister','leader','senior'].includes(role) || !['ALL',...DEPARTMENTS].includes(department)) {
+          throw new HttpError(400,'Invalid selection');
+        }
+        if ((role==='minister'&&(user.role!=='admin'||department!=='ALL')) ||
+            (role==='leader'&&(!['admin','minister'].includes(user.role)||!DEPARTMENTS.has(department))) ||
+            (role==='senior'&&(!DEPARTMENTS.has(department)||!(['admin','minister'].includes(user.role)||(user.role==='leader'&&user.role_department===department))))) {
+          throw new HttpError(403,'Access denied');
+        }
+        const result=await rpc('pd_site_role_request',{p_actor_id:user.id,p_target_id:target_id,p_role:role,p_department:department});
+        return send(res,200,{ok:true,...result});
+      }
+      if (req.method === 'POST' && url.pathname === '/api/roles/decide') {
+        const user=await identity(req);
+        if(!['admin','minister'].includes(user.role)) throw new HttpError(403,'Access denied');
+        const input=await bodyJson(req,1024);
+        if(!UUID_RE.test(input.request_id||'')||!['approve','reject'].includes(input.decision)) throw new HttpError(400,'Invalid request');
+        const result=await rpc('pd_site_role_decide',{p_actor_id:user.id,p_request_id:input.request_id,p_decision:input.decision});
+        return send(res,200,{ok:true,...result});
+      }
+      if (req.method === 'POST' && url.pathname === '/api/roles/revoke') {
+        const user=await identity(req);requireManager(user);
+        const input=await bodyJson(req,1024);
+        if(!UUID_RE.test(input.target_id||'')) throw new HttpError(400,'Invalid account');
+        const result=await rpc('pd_site_role_revoke',{p_actor_id:user.id,p_target_id:input.target_id});
+        return send(res,200,{ok:true,revoked:result});
       }
 
       if (req.method === 'GET' && url.pathname === '/api/punishments') {
