@@ -120,12 +120,12 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
     const r = await supabase('GET', `pd_ws_roles?${new URLSearchParams({select:'role,department',login:`eq.${login}`,limit:'1'})}`);
     const role = r?.[0]?.role || null;
     const dept = r?.[0]?.department || null;
-    const all = role === 'admin' || role === 'minister';
+    const all = ['developer','admin','minister'].includes(role);
     const editable = all ? [...DEPARTMENTS] : (role === 'leader' || role === 'senior') && DEPARTMENTS.has(dept) ? [dept] : [];
-    return { id: login, login, nickname: state.nickname || state.login, role, role_department: dept, department: dept || '', is_admin: role === 'admin', editable_departments: editable };
+    return { id: login, login, nickname: state.nickname || state.login, role, role_department: dept, department: dept || '', is_admin: role === 'developer' || role === 'admin', editable_departments: editable };
   }
-  function requireRoleManager(user) {
-    if (!['admin','minister'].includes(user.role)) throw new HttpError(403,'Access denied');
+  function requireManager(user) {
+    if (!['developer','admin','minister'].includes(user.role)) throw new HttpError(403,'Access denied');
   }
   async function userNames(logins) {
     const unique=[...new Set(logins.filter(v => typeof v==='string' && LOGIN_RE.test(v)))];
@@ -239,8 +239,21 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
         if (result!==true) throw new HttpError(409,'Administrator already exists');
         return send(res,200,{ok:true});
       }
+      if (req.method === 'POST' && url.pathname === '/api/site/developer-bootstrap') {
+        limitLogin(req);
+        const user=await identity(req);
+        if(user.role!=='admin') throw new HttpError(403,'Access denied');
+        const input=await bodyJson(req,1024);
+        const supplied=input.bootstrap_token;
+        const secret=env.PD_DEVELOPER_BOOTSTRAP_TOKEN||'';
+        if(typeof supplied!=='string'||secret.length<32||supplied.length!==secret.length||
+            !timingSafeEqual(Buffer.from(supplied),Buffer.from(secret))) throw new HttpError(403,'Access denied');
+        const result=await rpc('pd_ws_initial_developer',{p_login:user.login});
+        if(result!==true) throw new HttpError(409,'Developer already assigned');
+        return send(res,200,{ok:true});
+      }
       if (req.method === 'GET' && url.pathname === '/api/roles/users') {
-        const user=await identity(req); requireRoleManager(user);
+        const user=await identity(req); requireManager(user);
         const search=String(url.searchParams.get('search')||'').trim().toLowerCase();
         if(!/^[a-z0-9_.-]{2,32}$/.test(search)) return send(res,200,{ok:true,items:[]});
         const q=new URLSearchParams({select:'login,nickname',login:`ilike.${search}*`,order:'login.asc',limit:'20'});
@@ -251,7 +264,7 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
         return send(res,200,{ok:true,items:people.map(p=>({id:p.login.toLowerCase(),login:p.login,nickname:p.nickname,role:map.get(p.login.toLowerCase())?.role||null,department:map.get(p.login.toLowerCase())?.department||null}))});
       }
       if (req.method === 'GET' && url.pathname === '/api/roles/requests') {
-        const user=await identity(req); requireRoleManager(user);
+        const user=await identity(req); requireManager(user);
         const q=new URLSearchParams({select:'id,requested_by,target_login,department,status,created_at',status:'eq.pending',order:'created_at.desc',limit:'100'});
         if (user.role==='leader') q.set('requested_by',`eq.${user.login}`);
         const rows=await supabase('GET',`pd_ws_role_requests?${q}`);
@@ -261,14 +274,16 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
           target_user:names.get(r.target_login)||r.target_login}))});
       }
       if (req.method === 'POST' && url.pathname === '/api/roles/assign') {
-        const user=await identity(req); requireRoleManager(user);
+        const user=await identity(req); requireManager(user);
         const input=await bodyJson(req,2048);
         const target=String(input.target_login||input.target_id||'').trim().toLowerCase();
         const role=input.role,dept=input.department;
-        if (!LOGIN_RE.test(target)||!['minister','leader','senior'].includes(role)||!['ALL',...DEPARTMENTS].includes(dept)) throw new HttpError(400,'Invalid selection');
-        if ((role==='minister' && (user.role!=='admin'||dept!=='ALL')) ||
-            (role==='leader' && (!['admin','minister'].includes(user.role)||!DEPARTMENTS.has(dept))) ||
-            (role==='senior' && (!DEPARTMENTS.has(dept)||!(['admin','minister'].includes(user.role)||(user.role==='leader'&&user.role_department===dept))))) throw new HttpError(403,'Access denied');
+        if(!LOGIN_RE.test(target)||!['developer','admin','minister','leader','senior'].includes(role)||
+           !['ALL',...DEPARTMENTS].includes(dept)) throw new HttpError(400,'Invalid selection');
+        if((['developer','admin','minister'].includes(role) && dept!=='ALL') ||
+           (['leader','senior'].includes(role) && !DEPARTMENTS.has(dept))) throw new HttpError(400,'Invalid department');
+        if(user.role!=='developer' && (['developer','admin'].includes(role) ||
+           (role==='minister' && user.role!=='admin'))) throw new HttpError(403,'Access denied');
         const result=await rpc('pd_ws_role_assign',{p_actor:user.login,p_target:target,p_role:role,p_dept:dept});
         return send(res,200,{ok:true,...result});
       }
@@ -276,7 +291,7 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
         throw new HttpError(404,'Not found');
       }
       if (req.method === 'POST' && url.pathname === '/api/roles/revoke') {
-        const user=await identity(req);requireRoleManager(user);
+        const user=await identity(req);requireManager(user);
         const input=await bodyJson(req,1024);
         const target=String(input.target_login||input.target_id||'').trim().toLowerCase();
         if (!LOGIN_RE.test(target)) throw new HttpError(400,'Invalid account');
