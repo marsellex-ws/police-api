@@ -128,6 +128,25 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
   function requireManager(user) {
     if (!['developer','admin','minister'].includes(user.role)) throw new HttpError(403,'Access denied');
   }
+  // Avatar data belongs to the existing World Script profile; no duplicate profile table.
+  async function profileAvatar(login) {
+    const query = new URLSearchParams({ select: 'avatar_path,avatar_url', login: `eq.${login}`, limit: '1' });
+    const profiles = await supabase('GET', `ws_profiles?${query}`);
+    const profile = profiles?.[0];
+    if (!profile) return null;
+    const base = env.SUPABASE_URL?.replace(/\/$/, '');
+    const prefix = `${base}/storage/v1/object/public/ws-avatars/`;
+    // Serve only objects from the designated PUBLIC bucket, never an arbitrary remote URL.
+    const path = String(profile.avatar_path || '').trim();
+    if (path && !path.startsWith('/') && !path.includes('..') && !path.includes('\\') &&
+        path.split('/').every(p => p && /^[a-zA-Z0-9_.-]+$/.test(p))) {
+      return prefix + path.split('/').map(encodeURIComponent).join('/');
+    }
+    const stored = String(profile.avatar_url || '');
+    if (stored.startsWith(prefix) && !/[< >\\]/.test(stored)) return stored;
+    return null;
+  }
+
   async function userNames(logins) {
     const unique=[...new Set(logins.filter(v => typeof v==='string' && LOGIN_RE.test(v)))];
     if (!unique.length) return new Map();
@@ -222,7 +241,11 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
       }
       if (req.method === 'GET' && url.pathname === '/api/auth/me') {
         const user=await identity(req);
-        return send(res,200,{ok:true,user});
+        // A damaged/empty avatar must not break sign-in.
+        let avatar_url=null;
+        try { avatar_url=await profileAvatar(user.login); }
+        catch(error) { console.error('Avatar lookup failed', error?.name || 'Error'); }
+        return send(res,200,{ok:true,user:{...user,avatar_url}});
       }
       if (req.method === 'POST' && url.pathname === '/api/auth/logout') {
         const token=tokenFrom(req);
