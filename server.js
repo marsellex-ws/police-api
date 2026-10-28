@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { handleExamRequest } from './exams-api.js';
 import { timingSafeEqual } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 
@@ -174,10 +175,11 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
       const origin = req.headers.origin;
       if (origin && !allowedOrigins.has(origin)) throw new HttpError(403, 'Origin not allowed');
       if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
       res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
       if (req.method === 'OPTIONS') return send(res, 204, {});
       const url = new URL(req.url, 'http://localhost');
+      if (await handleExamRequest({ req, res, url, supabase, identity, bodyJson, send, HttpError })) return;
 
       if (req.method === 'GET' && url.pathname === '/health') {
         return send(res, 200, { ok: true, service: 'police-api', database_configured: Boolean(env.SUPABASE_SECRET_KEY && env.SUPABASE_URL) });
