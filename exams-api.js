@@ -68,33 +68,44 @@ function throttle(req, HttpError) {
   if(entry.count>12) throw new HttpError(429,'Слишком много попыток. Повтори позже');
 }
 
+function reviewQuestion(q,a){
+ const chosen=Array.isArray(a?.choice_ids)?a.choice_ids:[];
+ const free=typeof a?.free_text==='string'?a.free_text.trim():'';
+ const accepted=Array.isArray(q.accepted_text)?q.accepted_text:[];
+ const opts=Array.isArray(q.options)?q.options:[];
+ const right=opts.filter(o=>o.correct===true).map(o=>o.id);
+ let is_correct=false;
+ if(free)is_correct=accepted.some(t=>norm(t)===norm(free));
+ else if(q.answer_mode==='text')is_correct=false;
+ else is_correct=chosen.length===right.length&&chosen.every(id=>right.includes(id));
+ return {question_id:q.id,title:q.title,description:q.description||'',answer_mode:q.answer_mode,
+   options:opts.map(o=>({id:o.id,text:o.text,correct:o.correct===true})),
+   accepted_text:accepted,selected_ids:chosen,free_text:free,is_correct};
+}
 function grade(questions, answers, HttpError) {
-  let score=0;
-  if(!answers || typeof answers !== 'object' || Array.isArray(answers)) throw new HttpError(400,'Ответы отсутствуют');
-  if(Object.keys(answers).length !== questions.length) throw new HttpError(400,'Ответь на все вопросы');
-  const allowedIds=new Set(questions.map(q=>q.id));
-  if(Object.keys(answers).some(k=>!allowedIds.has(k))) throw new HttpError(400,'Обнаружен неизвестный вопрос');
-  for(const q of questions){
-    const a=answers[q.id];
-    if(!a||typeof a !== 'object'||Array.isArray(a)) throw new HttpError(400,'Не указан ответ на вопрос');
-    const choice=Array.isArray(a.choice_ids)?a.choice_ids:[];
-    const free=typeof a.free_text === 'string'?a.free_text.trim():'';
-    if(free.length>1000||choice.length>MAX_OPTIONS||new Set(choice).size!==choice.length) throw new HttpError(400,'Некорректный ответ');
-    const ids=new Set((q.options||[]).map(o=>o.id));
-    if(choice.some(id=>typeof id!=='string'||!ids.has(id))) throw new HttpError(400,'Выбран неизвестный вариант ответа');
-    if(q.answer_mode==='text'){
-      if(choice.length||!free) throw new HttpError(400,'Введи свободный ответ');
-      if((q.accepted_text||[]).some(v=>norm(v)===norm(free))) score++;
-    } else if(free){
-      if(!q.allow_custom||choice.length) throw new HttpError(400,'Свой ответ недоступен для этого вопроса');
-      if((q.accepted_text||[]).some(v=>norm(v)===norm(free))) score++;
-    } else {
-      if(!choice.length||(q.answer_mode==='single'&&choice.length!==1)) throw new HttpError(400,'Выбери вариант ответа');
-      const correct=(q.options||[]).filter(o=>o.correct).map(o=>o.id);
-      if(choice.length===correct.length&&choice.every(id=>correct.includes(id))) score++;
-    }
+ let score=0;const review=[];
+ if(!answers||typeof answers!=='object'||Array.isArray(answers))throw new HttpError(400,'Ответы отсутствуют');
+ if(Object.keys(answers).length!==questions.length)throw new HttpError(400,'Ответь на все вопросы');
+ const known=new Set(questions.map(q=>q.id));
+ if(Object.keys(answers).some(k=>!known.has(k)))throw new HttpError(400,'Обнаружен неизвестный вопрос');
+ for(const q of questions){
+  const a=answers[q.id];
+  if(!a||typeof a!=='object'||Array.isArray(a))throw new HttpError(400,'Не указан ответ на вопрос');
+  const choice=Array.isArray(a.choice_ids)?a.choice_ids:[];
+  const free=typeof a.free_text==='string'?a.free_text.trim():'';
+  if(free.length>1000||choice.length>MAX_OPTIONS||new Set(choice).size!==choice.length)throw new HttpError(400,'Некорректный ответ');
+  const ids=new Set((q.options||[]).map(o=>o.id));
+  if(choice.some(id=>typeof id!=='string'||!ids.has(id)))throw new HttpError(400,'Выбран неизвестный вариант ответа');
+  if(q.answer_mode==='text'){
+   if(choice.length||!free)throw new HttpError(400,'Введи свободный ответ');
+  }else if(free){
+   if(!q.allow_custom||choice.length)throw new HttpError(400,'Свой ответ недоступен для этого вопроса');
+  }else if(!choice.length||(q.answer_mode==='single'&&choice.length!==1)){
+   throw new HttpError(400,'Выбери вариант ответа');
   }
-  return score;
+  const info=reviewQuestion(q,a);if(info.is_correct)score++;review.push(info);
+ }
+ return {score,review};
 }
 
 export async function handleExamRequest({req,res,url,supabase,identity,bodyJson,send,HttpError}) {
@@ -131,13 +142,46 @@ export async function handleExamRequest({req,res,url,supabase,identity,bodyJson,
     const exam=await getExam(slug);if(!exam.active)throw new HttpError(404,'Экзамен недоступен');
     const questions=await getQuestions(slug);
     if(!questions.length)throw new HttpError(409,'В этом экзамене пока нет вопросов');
-    const score=grade(questions,input.answers,HttpError), total=questions.length;
+    const {score,review}=grade(questions,input.answers,HttpError), total=questions.length;
     const status=score/total*100>=exam.pass_percent?'passed':'failed';
     const out=await supabase('POST','pd_exam_attempts?select=id,exam_slug,nickname,score,total,pass_percent,status,submitted_at',{
-      exam_slug:slug,nickname,answers:input.answers,score,total,pass_percent:exam.pass_percent,status
+      exam_slug:slug,nickname,answers:input.answers,review,score,total,pass_percent:exam.pass_percent,status
     },{prefer:'return=representation'});
     if(!out?.[0])throw new HttpError(502,'Не удалось сохранить результат');
     send(res,201,{ok:true,result:out[0]});return true;
+  }
+  // Never expose raw answers, correctness or review snapshots to the public API.
+  if(req.method==='GET'&&path==='/api/exams/admin/attempts'){
+    await admin();
+    const limit=Number(url.searchParams.get('limit')||'20');
+    const offset=Number(url.searchParams.get('offset')||'0');
+    if(!Number.isInteger(limit)||limit<1||limit>50||!Number.isInteger(offset)||offset<0||offset>100000)throw new HttpError(400,'Некорректная страница');
+    const slug=url.searchParams.get('exam_slug')||'';
+    const status=url.searchParams.get('status')||'';
+    if(slug&&!SLUGS.has(slug))throw new HttpError(400,'Неизвестный экзамен');
+    if(status&&!['passed','failed','pending_review'].includes(status))throw new HttpError(400,'Неизвестный статус');
+    const q=new URLSearchParams({select:'id,exam_slug,nickname,score,total,pass_percent,status,submitted_at',order:'submitted_at.desc,id.desc',limit:String(limit+1),offset:String(offset)});
+    if(slug)q.set('exam_slug',`eq.${slug}`);
+    if(status)q.set('status',`eq.${status}`);
+    const rows=await supabase('GET',`pd_exam_attempts?${q}`);
+    send(res,200,{ok:true,items:rows.slice(0,limit),has_more:rows.length>limit,next_offset:rows.length>limit?offset+limit:null});return true;
+  }
+  const detailMatch=/^\/api\/exams\/admin\/attempts\/([0-9a-f-]+)$/i.exec(path);
+  if(req.method==='GET'&&detailMatch){
+    await admin();const id=detailMatch[1];
+    if(!ID_RE.test(id))throw new HttpError(400,'Неверный ID сдачи');
+    const q=new URLSearchParams({id:`eq.${id}`,select:'id,exam_slug,nickname,answers,review,score,total,pass_percent,status,submitted_at',limit:'1'});
+    const found=await supabase('GET',`pd_exam_attempts?${q}`);
+    if(!found.length)throw new HttpError(404,'Результат не найден');
+    const attempt=found[0];
+    const snapshot_available=Array.isArray(attempt.review)&&attempt.review.length>0;
+    let review=attempt.review||[];
+    if(!snapshot_available){
+      const current=await getQuestions(attempt.exam_slug);
+      review=current.filter(q=>attempt.answers&&Object.hasOwn(attempt.answers,q.id)).map(q=>reviewQuestion(q,attempt.answers[q.id]));
+    }
+    const {answers:privateAnswers,review:privateReview,...publicAttempt}=attempt;
+    send(res,200,{ok:true,attempt:publicAttempt,review,snapshot_available});return true;
   }
   if(req.method==='GET'&&manageMatch){
     await admin();const exam=await getExam(manageMatch[1]);const questions=await getQuestions(exam.slug);
