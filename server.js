@@ -409,3 +409,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const port = Number(process.env.PORT || 10000);
   http.createServer(createApp()).listen(port, '0.0.0.0', () => console.log(`police-api listening on port ${port}`));
 }
+
+// Vercel entrypoint
+export default createApp();
