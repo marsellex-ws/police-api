@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 
 const LOGIN = /^[a-z0-9_.-]{3,32}$/i;
 const DEPTS = new Set(['LSPD','SFPD','LVPD']);
-const SLOTS = new Set(['responsible','curator_lspd','curator_sfpd','curator_lvpd','minister','leader_lspd','leader_sfpd','leader_lvpd']);
+const SLOTS = new Set(['responsible','curator_lspd','curator_sfpd','curator_lvpd','minister','leader_lspd','leader_sfpd','leader_lvpd','swat_deputy','swat_commander']);
 const avatarBase = 'https://pbwgvyhchpzmgqjyqxzv.supabase.co/storage/v1/object/public/ws-avatars/';
 function clean(value,max, HttpError) {
   if (typeof value !== 'string' || value.length>max) throw new HttpError(400,'Неверное значение поля');
@@ -23,7 +23,7 @@ function vkUrl(v,HttpError){
   return s;
 }
 const sorted = arr=>arr.sort((a,b)=>String(a.nickname||'').localeCompare(String(b.nickname||''),'ru'));
-export async function handlePortalRequest({ req,res,url,supabase,identity,rpc,bodyJson,send,HttpError }){
+export async function handlePortalRequest({ req,res,url,supabase,identity,rpc,bodyJson,send,HttpError,storageUpload }){
   const path=url.pathname;
   if(!path.startsWith('/api/portal/'))return false;
   const admin = async () => {
@@ -54,6 +54,20 @@ export async function handlePortalRequest({ req,res,url,supabase,identity,rpc,bo
       avatar_url:p.avatar_url|| (p.avatar_path ? avatarBase+p.avatar_path.split('/').map(encodeURIComponent).join('/') : ''),
       role:roleMap.get(p.login.toLowerCase())||null,vk_url:linkMap.get(p.login.toLowerCase())||''})));
     send(res,200,{ok:true,items});return true;
+  }
+  if(req.method==='POST'&&path==='/api/portal/admin/leadership/avatar'){
+    const body=await bodyJson(req,430000);
+    const slot=String(body.slot||'');if(!SLOTS.has(slot))throw new HttpError(400,'Неизвестная должность');
+    const mime=String(body.mime||'');if(!['image/png','image/jpeg'].includes(mime))throw new HttpError(400,'Разрешены PNG и JPG');
+    const encoded=String(body.base64||'');if(!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded))throw new HttpError(400,'Повреждённый файл');
+    const bytes=Buffer.from(encoded,'base64');
+    if(!bytes.length||bytes.length>300*1024)throw new HttpError(413,'Изображение должно быть не более 300 КБ');
+    const png=bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]));
+    const jpg=bytes[0]===255&&bytes[1]===216&&bytes[2]===255;
+    if((mime==='image/png'&&!png)||(mime==='image/jpeg'&&!jpg))throw new HttpError(400,'Формат файла не совпадает с содержимым');
+    const ext=png?'png':'jpg';const filename=`leadership/${slot}-${randomBytes(12).toString('hex')}.${ext}`;
+    const avatar_url=await storageUpload(filename,bytes,mime);
+    send(res,200,{ok:true,avatar_url});return true;
   }
   const passwordMatch=/^\/api\/portal\/admin\/users\/([a-z0-9_.-]{3,32})\/password$/i.exec(path);
   if(req.method==='POST'&&passwordMatch){
