@@ -53,6 +53,14 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
     return raw ? JSON.parse(raw) : null;
   }
 
+  async function storageUpload(path, bytes, contentType) {
+    const {url,key}=requiredEnv(env);
+    const response=await fetchImpl(`${url}/storage/v1/object/ws-avatars/${path}`,{
+      method:'POST',headers:{apikey:key,'Content-Type':contentType,'x-upsert':'false','cache-control':'3600'},body:bytes,signal:AbortSignal.timeout(15000)
+    });
+    if(!response.ok){console.error('Storage upload failed',response.status);throw new HttpError(502,'Не удалось загрузить аватарку')}
+    return `${url}/storage/v1/object/public/ws-avatars/${path}`;
+  }
   const rpc = (name, args) => supabase('POST', `rpc/${name}`, args);
 
   async function bodyJson(req, maxBytes = 16384) {
@@ -199,7 +207,7 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
       res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
       if (req.method === 'OPTIONS') return send(res, 204, {});
       const url = new URL(req.url, 'http://localhost');
-      if (await handlePortalRequest({ req, res, url, supabase, identity, rpc, bodyJson, send, HttpError })) return;
+      if (await handlePortalRequest({ req, res, url, supabase, identity, rpc, bodyJson, send, HttpError, storageUpload })) return;
       if (await handleExamRequest({ req, res, url, supabase, identity, bodyJson, send, HttpError })) return;
 
       if (req.method === 'GET' && url.pathname === '/health') {
