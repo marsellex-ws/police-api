@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 
 const LOGIN = /^[a-z0-9_.-]{3,32}$/i;
 const DEPTS = new Set(['LSPD','SFPD','LVPD']);
-const SLOTS = new Set(['responsible','curator_lspd','curator_sfpd','curator_lvpd','minister','leader_lspd','leader_sfpd','leader_lvpd','swat_deputy','swat_commander']);
+const SLOTS = new Set(['responsible','curator_lspd','curator_sfpd','curator_lvpd','minister','leader_lspd','leader_sfpd','leader_lvpd','swat_deputy','swat_commander','swat_deputy_2']);
 const avatarBase = 'https://pbwgvyhchpzmgqjyqxzv.supabase.co/storage/v1/object/public/ws-avatars/';
 function clean(value,max, HttpError) {
   if (typeof value !== 'string' || value.length>max) throw new HttpError(400,'Неверное значение поля');
@@ -90,7 +90,7 @@ export async function handlePortalRequest({ req,res,url,supabase,identity,rpc,bo
     await supabase('POST','pd_portal_admin_events',{actor:user.login,target,action:'set_vk'});
     send(res,200,{ok:true,vk_url});return true;
   }
-  const leadershipMatch=/^\/api\/portal\/admin\/leadership\/([a-z_]+)$/.exec(path);
+  const leadershipMatch=/^\/api\/portal\/admin\/leadership\/([a-z0-9_]+)$/.exec(path);
   if(req.method==='PUT'&&leadershipMatch){
     const slot=leadershipMatch[1];if(!SLOTS.has(slot))throw new HttpError(404,'Должность не найдена');
     const body=await bodyJson(req,3000);
