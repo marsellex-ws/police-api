@@ -5,7 +5,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 
 const LOGIN_RE = /^[a-z0-9_.-]{3,32}$/;
-const DEFAULT_ORIGINS = ['https://marsellex.ru', 'https://www.marsellex.ru'];
+const DEFAULT_ORIGINS = ['https://police-department.ru', 'https://www.police-department.ru', 'https://marsellex.ru', 'https://www.marsellex.ru'];
 const PUBLIC_COLUMNS = 'id,department,nickname,account_number,punishment_type,article,reason,evidence_url,issued_by,redemption_type,redemption_proof_url,redemption_proof_label,status,issued_at,paid_at,paid_by,created_at,updated_at,version';
 const DEPARTMENTS = new Set(['LSPD', 'SFPD', 'LVPD']);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
