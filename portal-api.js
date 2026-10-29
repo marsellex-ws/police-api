@@ -33,7 +33,7 @@ export async function handlePortalRequest({ req,res,url,supabase,identity,rpc,bo
   };
   const prefixes='/api/portal/admin/';
   if(req.method==='GET'&&path==='/api/portal/leadership'){
-    const items=await supabase('GET','pd_portal_leadership?select=slot,nickname,avatar_url,vk_url,gender,status_label');
+    const items=await supabase('GET','pd_portal_leadership?select=slot,nickname,avatar_url,vk_url,forum_url,gender');
     send(res,200,{ok:true,items});return true;
   }
   if(req.method==='GET'&&path==='/api/portal/chiefs'){
@@ -81,10 +81,10 @@ export async function handlePortalRequest({ req,res,url,supabase,identity,rpc,bo
     const slot=leadershipMatch[1];if(!SLOTS.has(slot))throw new HttpError(404,'Должность не найдена');
     const body=await bodyJson(req,3000);
     const nickname=clean(body.nickname,64,HttpError),avatar_url=httpsUrl(body.avatar_url,700,HttpError);
-    const vk_url=vkUrl(body.vk_url,HttpError), status_label=clean(body.status_label,100,HttpError);
+    const vk_url=vkUrl(body.vk_url,HttpError),forum_url=httpsUrl(body.forum_url||'',700,HttpError);
     const gender=body.gender;if(!['male','female'].includes(gender))throw new HttpError(400,'Неверное обращение');
-    const record={nickname,avatar_url,vk_url,status_label,gender,updated_by:user.login,updated_at:new Date().toISOString()};
-    const items=await supabase('PATCH',`pd_portal_leadership?${new URLSearchParams({slot:`eq.${slot}`,select:'slot,nickname,avatar_url,vk_url,gender,status_label'})}`,record,{prefer:'return=representation'});
+    const record={nickname,avatar_url,vk_url,forum_url,gender,updated_by:user.login,updated_at:new Date().toISOString()};
+    const items=await supabase('PATCH',`pd_portal_leadership?${new URLSearchParams({slot:`eq.${slot}`,select:'slot,nickname,avatar_url,vk_url,forum_url,gender'})}`,record,{prefer:'return=representation'});
     if(!items?.[0])throw new HttpError(404,'Должность не найдена');
     await supabase('POST','pd_portal_admin_events',{actor:user.login,target:slot,action:'set_leadership'});
     send(res,200,{ok:true,item:items[0]});return true;
