@@ -1,17 +1,3 @@
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "rewrites": [
-    {
-      "source": "/",
-      "destination": "/api/index?__police_path=health"
-    },
-    {
-      "source": "/health",
-      "destination": "/api/index?__police_path=health"
-    },
-    {
-      "source": "/api/:path*",
-      "destination": "/api/index?__police_path=api/:path*"
-    }
-  ]
+  "$schema": "https://openapi.vercel.sh/vercel.json"
 }
