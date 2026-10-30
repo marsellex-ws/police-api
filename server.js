@@ -302,12 +302,12 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
         const user=await identity(req); requireManager(user);
         const search=String(url.searchParams.get('search')||'').trim().toLowerCase();
         if(!/^[a-z0-9_.-]{2,32}$/.test(search)) return send(res,200,{ok:true,items:[]});
-        const q=new URLSearchParams({select:'login,nickname',login:`ilike.${search}*`,order:'login.asc',limit:'20'});
+        const q=new URLSearchParams({select:'login,nickname,avatar_url,avatar_path',login:`ilike.${search}*`,order:'login.asc',limit:'20'});
         const people=await supabase('GET',`ws_profiles?${q}`);
         const ids=people.map(p=>p.login.toLowerCase());
         const roles=ids.length?await supabase('GET',`pd_ws_roles?${new URLSearchParams({select:'login,role,department',login:`in.(${ids.join(',')})`})}`):[];
         const map=new Map(roles.map(r=>[r.login,r]));
-        return send(res,200,{ok:true,items:people.map(p=>({id:p.login.toLowerCase(),login:p.login,nickname:p.nickname,role:map.get(p.login.toLowerCase())?.role||null,department:map.get(p.login.toLowerCase())?.department||null}))});
+        return send(res,200,{ok:true,items:people.map(p=>({id:p.login.toLowerCase(),login:p.login,nickname:p.nickname,avatar_url:p.avatar_url || (p.avatar_path ? `${env.SUPABASE_URL.replace(/\/$/,'')}/storage/v1/object/public/ws-avatars/${p.avatar_path.split('/').map(encodeURIComponent).join('/')}` : null),role:map.get(p.login.toLowerCase())?.role||null,department:map.get(p.login.toLowerCase())?.department||null}))});
       }
       if (req.method === 'GET' && url.pathname === '/api/roles/requests') {
         const user=await identity(req); requireManager(user);
