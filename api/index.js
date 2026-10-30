@@ -1,8 +1,12 @@
 // Adapter for Vercel Node.js Functions.
 // The existing createApp() remains the single source of truth for all routes.
 import { createApp } from '../server.js';
+import { injectSpeedInsights } from '@vercel/speed-insights';
 
 const app = createApp();
+
+// Initialize Vercel Speed Insights
+injectSpeedInsights();
 
 export default function handler(req, res) {
   // Vercel rewrites forward the original route in a reserved query parameter.
