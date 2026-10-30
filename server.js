@@ -1,11 +1,11 @@
 import http from 'node:http';
 import { handleExamRequest } from './exams-api.js';
 import { handlePortalRequest } from './portal-api.js';
-import { timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual, createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 
 const LOGIN_RE = /^[a-z0-9_.-]{3,32}$/;
-const DEFAULT_ORIGINS = ['https://police-department.ru', 'https://www.police-department.ru', 'https://marsellex.ru', 'https://www.marsellex.ru'];
+const DEFAULT_ORIGINS = ['https://marsellex.ru', 'https://www.marsellex.ru'];
 const PUBLIC_COLUMNS = 'id,department,nickname,account_number,punishment_type,article,reason,evidence_url,issued_by,redemption_type,redemption_proof_url,redemption_proof_label,status,issued_at,paid_at,paid_by,created_at,updated_at,version';
 const DEPARTMENTS = new Set(['LSPD', 'SFPD', 'LVPD']);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -123,9 +123,20 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
     return match[1].toLowerCase();
   }
   async function identity(req) {
-    // Credentials and session ownership are verified by the existing WS functions.
-    const state = await rpc('ws_admin_access_state', { p_ws_session_token: tokenFrom(req) });
-    if (!state || Number(state.ok) !== 1 || typeof state.login !== 'string') throw new HttpError(401,'Session expired');
+    // The shared WS session may last 30 days. This website only accepts tokens
+    // created during the previous 24 hours, without changing other WS clients.
+    const sessionToken = tokenFrom(req);
+    const tokenHash = createHash('sha256').update(sessionToken).digest('hex');
+    // Fetch both checks concurrently to avoid adding another network round-trip.
+    const [sessions, state] = await Promise.all([
+      supabase('GET', `ws_sessions?${new URLSearchParams({select:'created_at',token_hash:`eq.${tokenHash}`,limit:'1'})}`),
+      rpc('ws_admin_access_state', { p_ws_session_token: sessionToken })
+    ]);
+    const createdAt = sessions?.[0]?.created_at && Date.parse(sessions[0].created_at);
+    if (!Number.isFinite(createdAt) || createdAt > Date.now() + 60000 || Date.now() - createdAt >= 24 * 60 * 60 * 1000 ||
+        !state || Number(state.ok) !== 1 || typeof state.login !== 'string') {
+      throw new HttpError(401, 'Session expired');
+    }
     const login = state.login.trim().toLowerCase();
     const r = await supabase('GET', `pd_ws_roles?${new URLSearchParams({select:'role,department',login:`eq.${login}`,limit:'1'})}`);
     const role = r?.[0]?.role || null;
@@ -247,7 +258,7 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
         if (!result || Number(result.ok)!==1 || !/^[a-f0-9]{64}$/i.test(result.session_token||'')) {
           throw new HttpError(401,'Invalid login or password');
         }
-        return send(res,200,{ok:true,session_token:result.session_token});
+        return send(res,200,{ok:true,session_token:result.session_token,expires_at:new Date(Date.now()+24*60*60*1000).toISOString()});
       }
       if (req.method === 'GET' && url.pathname === '/api/auth/me') {
         const user=await identity(req);
