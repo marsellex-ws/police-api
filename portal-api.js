@@ -23,6 +23,22 @@ function vkUrl(v,HttpError){
   return s;
 }
 const sorted = arr=>arr.sort((a,b)=>String(a.nickname||'').localeCompare(String(b.nickname||''),'ru'));
+// Calendar boundaries are Moscow-local; dates are represented as ISO UTC calendar days.
+const isoDate=d=>d.toISOString().slice(0,10);
+const addDays=(s,n)=>{const d=new Date(s+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+n);return isoDate(d)};
+function activityCalendar(){
+  const today=new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+  const day=new Date(today+'T12:00:00Z');
+  const monday=addDays(today,-((day.getUTCDay()+6)%7));
+  const starts=Array.from({length:8},(_,i)=>addDays(monday,(i-7)*7));
+  const weeks=starts.map(start=>({start,end:addDays(start,6)}));
+  return {today,monday,weeks,start:starts[0]};
+}
+function sumAo(rows,from,to){
+  const records=rows.filter(x=>x.activity_date>=from&&x.activity_date<=to);
+  return records.length?records.reduce((sum,x)=>sum+Number(x.ao||0),0):null;
+}
+
 export async function handlePortalRequest({ req,res,url,supabase,identity,rpc,bodyJson,send,HttpError,storageUpload }){
   const path=url.pathname;
   if(!path.startsWith('/api/portal/'))return false;
@@ -37,8 +53,26 @@ export async function handlePortalRequest({ req,res,url,supabase,identity,rpc,bo
     send(res,200,{ok:true,items});return true;
   }
   if(req.method==='GET'&&path==='/api/portal/chiefs'){
-    const items=await supabase('GET','pd_portal_chiefs?select=department,nickname,account_number,avatar_url');
-    send(res,200,{ok:true,items});return true;
+    const cal=activityCalendar();
+    const [chiefs,allAo]=await Promise.all([
+      supabase('GET','pd_portal_chiefs?select=department,nickname,account_number,avatar_url'),
+      supabase('GET',`pd_chief_ao_daily?${new URLSearchParams({select:'department,chief_account,activity_date,ao',activity_date:`gte.${cal.start}`,order:'activity_date.asc',limit:'300'})}`)
+    ]);
+    const items=chiefs.map(chief=>{
+      // A new chief must not inherit the previous chief's AO history.
+      const rows=allAo.filter(row=>row.department===chief.department&&row.chief_account===String(chief.account_number||''));
+      return {...chief,ao_day:sumAo(rows,cal.today,cal.today),ao_week:sumAo(rows,cal.monday,cal.today)};
+    });
+    const weeks=cal.weeks.map(w=>({
+      start:w.start,end:w.end,
+      totals:Object.fromEntries(['LSPD','SFPD','LVPD'].map(dept=>{
+        const chief=chiefs.find(c=>c.department===dept);
+        const rows=allAo.filter(r=>r.department===dept&&r.chief_account===String(chief?.account_number||''));
+        return [dept,sumAo(rows,w.start,w.end)];
+      }))
+    }));
+    res.setHeader('Cache-Control','no-store');
+    send(res,200,{ok:true,items,activity:{today:cal.today,week_start:cal.monday,weeks}});return true;
   }
   if(!path.startsWith(prefixes))throw new HttpError(404,'Раздел не найден');
   const user=await admin();
@@ -90,7 +124,7 @@ export async function handlePortalRequest({ req,res,url,supabase,identity,rpc,bo
     await supabase('POST','pd_portal_admin_events',{actor:user.login,target,action:'set_vk'});
     send(res,200,{ok:true,vk_url});return true;
   }
-  const leadershipMatch=/^\/api\/portal\/admin\/leadership\/([a-z0-9_]+)$/.exec(path);
+  const leadershipMatch=/^\/api\/portal\/admin\/leadership\/([a-z_]+)$/.exec(path);
   if(req.method==='PUT'&&leadershipMatch){
     const slot=leadershipMatch[1];if(!SLOTS.has(slot))throw new HttpError(404,'Должность не найдена');
     const body=await bodyJson(req,3000);
@@ -102,6 +136,26 @@ export async function handlePortalRequest({ req,res,url,supabase,identity,rpc,bo
     if(!items?.[0])throw new HttpError(404,'Должность не найдена');
     await supabase('POST','pd_portal_admin_events',{actor:user.login,target:slot,action:'set_leadership'});
     send(res,200,{ok:true,item:items[0]});return true;
+  }
+  // Manual AO entry is available only to portal admins and developers.
+  const aoMatch=/^\/api\/portal\/admin\/chiefs\/(LSPD|SFPD|LVPD)\/activity$/.exec(path);
+  if(req.method==='PUT'&&aoMatch){
+    const department=aoMatch[1];
+    const body=await bodyJson(req,2048);
+    const date=String(body.date||''),ao=body.ao;
+    const cal=activityCalendar();
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||!Number.isFinite(Date.parse(date+'T12:00:00Z'))||isoDate(new Date(date+'T12:00:00Z'))!==date)
+      throw new HttpError(400,'Некорректная дата');
+    if(date>cal.today||date<addDays(cal.today,-365)) throw new HttpError(400,'Дата должна быть за прошедший год, не позднее сегодня (МСК)');
+    if(!Number.isSafeInteger(ao)||ao<0||ao>100000)throw new HttpError(400,'АО должно быть целым числом от 0 до 100000');
+    const chiefs=await supabase('GET',`pd_portal_chiefs?${new URLSearchParams({select:'account_number',department:`eq.${department}`,limit:'1'})}`);
+    const account=String(chiefs[0]?.account_number||'');
+    if(!/^\d{1,20}$/.test(account))throw new HttpError(400,'Сначала укажите номер аккаунта шефа в админке');
+    const rows=await supabase('POST','pd_chief_ao_daily?on_conflict=department,chief_account,activity_date',
+      {department,chief_account:account,activity_date:date,ao,updated_by:user.login,updated_at:new Date().toISOString()},
+      {prefer:'resolution=merge-duplicates,return=representation'});
+    res.setHeader('Cache-Control','no-store, private');
+    send(res,200,{ok:true,item:rows?.[0]||{department,chief_account:account,activity_date:date,ao}});return true;
   }
   const chiefMatch=/^\/api\/portal\/admin\/chiefs\/([A-Z]+)$/.exec(path);
   if(req.method==='PUT'&&chiefMatch){
