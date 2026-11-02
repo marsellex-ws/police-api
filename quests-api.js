@@ -57,7 +57,7 @@ export async function handleQuestsRequest({req,res,url,supabase,identity,rpc,bod
    return returnJSON(200,{items:await supabase('GET',`pd_quest_requests?${qstr(filters)}`)});
  }
  if(req.method==='GET'&&path==='/api/portal/quests/history'){
-   const filters={select:'id,source_sheet,source_row,track,department,nickname,event_type,before_points,amount,after_points,description,event_date,date_text,needs_review',order:'id.desc',limit:'120'};
+   const filters={select:'id,source_sheet,source_row,track,department,nickname,event_type,before_points,amount,after_points,description,event_date,date_text,needs_review,source_data',order:'id.desc',limit:'1000'};
    if(level==='leader'){filters.department=`eq.${dept}`;filters.track='eq.senior'}
    if(level==='self'){if(!dept)throw new HttpError(403,'Нет департамента');filters.department=`eq.${dept}`;filters.track=`eq.${rankTrack(u)}`;filters.nickname=`eq.${u.nickname}`}
    if(manage&&DEPT_OK(url.searchParams.get('department')))filters.department=`eq.${url.searchParams.get('department')}`;
@@ -65,7 +65,7 @@ export async function handleQuestsRequest({req,res,url,supabase,identity,rpc,bod
    return returnJSON(200,{items:level==='self'?hist.filter(x=>String(x.nickname).toLowerCase()===String(u.nickname).toLowerCase()):hist});
  }
  if(req.method==='GET'&&path==='/api/portal/quests/ledger'){
-   const filters={select:'id,department,track,nickname,amount,description,performed_by,created_at',order:'created_at.desc',limit:'120'};
+   const filters={select:'id,department,track,nickname,amount,description,performed_by,created_at',order:'created_at.desc',limit:'300'};
    if(level==='leader'){filters.department=`eq.${dept}`;filters.track='eq.senior'}
    if(level==='self'){if(!dept)throw new HttpError(403,'Нет департамента');filters.department=`eq.${dept}`;filters.track=`eq.${rankTrack(u)}`;filters.nickname=`eq.${u.nickname}`}
    const ledger=await supabase('GET',`pd_quest_ledger?${qstr(filters)}`);
