@@ -1,5 +1,6 @@
 // Police Department portal / staff administration. All mutations require an authenticated admin/developer.
 import { randomBytes } from 'node:crypto';
+import { handleQuestsRequest } from './quests-api.js';
 
 const LOGIN = /^[a-z0-9_.-]{3,32}$/i;
 const DEPTS = new Set(['LSPD','SFPD','LVPD']);
@@ -42,6 +43,7 @@ function sumAo(rows,from,to){
 export async function handlePortalRequest({ req,res,url,supabase,identity,rpc,bodyJson,send,HttpError,storageUpload }){
   const path=url.pathname;
   if(!path.startsWith('/api/portal/'))return false;
+  if(await handleQuestsRequest({req,res,url,supabase,identity,rpc,bodyJson,send,HttpError}))return true;
   const admin = async () => {
     const u=await identity(req);
     if(!['admin','developer'].includes(u.role))throw new HttpError(403,'Недостаточно прав');
