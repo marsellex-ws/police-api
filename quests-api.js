@@ -41,6 +41,21 @@ export async function handleQuestsRequest({req,res,url,supabase,identity,rpc,bod
    ]);
    return returnJSON(200,{me:{nickname:u.nickname,login:u.login,role:u.role,department:dept,permissions:level,track:rankTrack(u)},member,jobs,rewards});
  }
+ // Compact public roster for authenticated portal members. No account numbers, punishments or notes.
+ if(req.method==='GET'&&path==='/api/portal/quests/roster-public'){
+   const rows=await supabase('GET',`pd_quest_members?${qstr({select:'department,nickname,track,balance',track:'in.(senior,leader)',order:'department.asc,track.asc,nickname.asc',limit:'300'})}`);
+   const names=[...new Set((rows||[]).map(x=>String(x.nickname||'').trim()).filter(Boolean))];
+   let avatars=[];
+   if(names.length){
+     const inValues=names.map(name=>'"'+name.replace(/\\/g,'\\\\').replace(/"/g,'\\"')+'"').join(',');
+     try {avatars=await supabase('GET',`ws_profiles?${qstr({select:'nickname,avatar_url',nickname:`in.(${inValues})`,limit:'300'})}`)}
+     catch {avatars=[]}
+   }
+   const normalizeName=n=>String(n||'').toLocaleLowerCase('ru').replace(/[\s_]+/g,'');
+   const avatarMap=new Map((avatars||[]).filter(x=>typeof x.avatar_url==='string'&&x.avatar_url.startsWith('https://')).map(x=>[normalizeName(x.nickname),x.avatar_url]));
+   const items=(rows||[]).map(x=>({department:x.department,nickname:x.nickname,track:x.track,balance:x.balance,avatar_url:avatarMap.get(normalizeName(x.nickname))||''}));
+   return returnJSON(200,{items});
+ }
  if(req.method==='GET'&&path==='/api/portal/quests/roster'){
    if(level==='self')throw new HttpError(403,'Недостаточно прав');
    const d=level==='leader'?dept:(DEPT_OK(url.searchParams.get('department'))?url.searchParams.get('department'):null);
