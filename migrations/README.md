@@ -17,6 +17,8 @@ node --use-env-proxy scripts/database.mjs
 
 The read-only check reports table columns, the existing balance function signature and member constraints. It prints neither credentials nor account data. Confirm the production schema matches the migration: UUID member IDs; JSONB archive `source_data`; member uniqueness on `(department,nickname,track)`; and the existing transactional `pd_quest_adjust_balance` function with the named arguments used in the migration. This environment's local fixture tests do not establish production schema compatibility.
 
+The default check explicitly uses Management API read-only mode. After migration, it also reports registry RLS and RPC execution grants for `anon`, `authenticated` and `service_role`.
+
 After that check, apply and recheck:
 
 ```sh
@@ -38,9 +40,9 @@ The archive nickname is the available ownership identifier; nickname changes req
 
 ## Validation performed locally
 
-- 12 Node API tests, including permissions, immutable session actor and duplicate/conflict errors.
+- 16 Node API tests, including full HTTP routing, WS session authentication, permissions, immutable session actor and duplicate/conflict errors. Run with `npm test`.
 - 24 checks in isolated PostgreSQL (PGlite) against a representative schema: import validation, 30 + 300 = 330, duplicate/concurrent thaw, wrong department/identity, role restrictions, rollback after a ledger error, archive flag and SQL function grants.
-- 22 browser checks with a simulated API for guest, chief, minister, administrator and developer, including import/thaw forms and mobile layout.
+- 26 browser checks with a simulated API for guest, chief, minister, administrator and developer, including import/thaw forms, 30 + 300 = 330, and mobile layout.
 
 Production migrations and real account balances still require the configured project connection and successful schema inspection.
 
@@ -52,3 +54,13 @@ PGLITE_MODULE=/tmp/police-sql-check/node_modules/@electric-sql/pglite/dist/index
 ```
 
 This test uses an in-memory database and creates its own representative schema. It does not read production credentials or connect to Supabase.
+
+## Production verification — 5 November 2026 (Moscow)
+
+The configured Management API connection to `pbwgvyhchpzmgqjyqxzv` succeeded. Actual columns, member constraints and the complete existing balance function were inspected before applying this migration. The migration completed successfully, and a subsequent read-only schema inspection confirmed the new table and both function signatures.
+
+Registry RLS is enabled. Both RPCs are security-definer functions; `anon` and `authenticated` cannot execute them, while `service_role` can. Separate calls with an unassigned actor returned 403 for both import and thaw without changing data. No historical freezes were confirmed and no active balances were changed.
+
+The archive contains 41 leader freeze rows: 16 already marked thawed and 25 candidates (LSPD 9, SFPD 7, LVPD 9). Some frozen amounts differ from the earlier running balance, so the amount must still be confirmed by an administrator; do not substitute `before_points` or import all rows automatically.
+
+The hosted API reports `database_configured: true`. This confirms its existing application configuration, not deployment of this feature branch. GitHub merging and deployment of the API and static page are separate from applying the database migration. A successful real-user thaw has deliberately not been performed as a deployment test.
