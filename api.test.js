@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { createApp } from '../server.js';
+import { createApp } from './server.js';
 
 const TOKEN = 'a'.repeat(64);
 const UID = '31bf20da-3c21-401f-a229-12d6cf7a9d33';
@@ -15,6 +15,9 @@ function fakeDatabase() {
     if (path === 'rpc/ws_profile_login') response = { ok: 1, session_token: TOKEN, login: 'tester', nickname: 'Tester', department: 'LSPD' };
     else if (path === 'rpc/ws_admin_access_state') response = { ok: 1, login: 'tester', nickname: 'Tester', department: 'LSPD' };
     else if (path === 'rpc/ws_profile_logout') response = { ok: 1 };
+    else if (path === 'ws_sessions') response = [{ created_at: new Date().toISOString() }];
+    else if (path === 'pd_ws_roles') response = [{ role: 'senior', department: 'LSPD' }];
+    else if (path === 'ws_profiles') response = [];
     else if (path === 'pd_access') response = [{ department: 'LSPD', role: 'editor' }];
     else if (path === 'pd_punishments' && options.method === 'POST') {
       const item = { ...body, id: UID, version: 1 };
