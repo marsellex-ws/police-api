@@ -1,3 +1,4 @@
+import { handleFrozenPoints } from './frozen-points-api.js';
 /* Police Department — quests, approvals and point exchange.
    All read/write access flows through the WS session identity.
    Direct browser access to Supabase tables is revoked. */
@@ -22,6 +23,7 @@ const safeUrl = s => {try{const u=new URL(s);return u.protocol==='https:' && !u.
 export async function handleQuestsRequest({req,res,url,supabase,identity,rpc,bodyJson,send,HttpError}) {
  const path=url.pathname;
  if(!path.startsWith('/api/portal/quests'))return false;
+ if(await handleFrozenPoints({req,res,url,supabase,identity,rpc,bodyJson,send,HttpError}))return true;
  const u=await identity(req);needsLogin(u,HttpError);
  const level=scope(u),manage=level==='all',dept=DEPT_OK(u.department)?u.department:null;
  const requireManager=()=>{if(!manage)throw new HttpError(403,'Недостаточно прав');};
