@@ -4,9 +4,14 @@
   "private": true,
   "type": "module",
   "description": "Protected Police Department registry API (Render + World Script + Supabase)",
-  "engines": {"node": ">=20"},
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node server.js",
     "test": "node --test"
+  },
+  "dependencies": {
+    "@vercel/speed-insights": "^2.0.0"
   }
 }
