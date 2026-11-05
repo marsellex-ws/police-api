@@ -40,7 +40,7 @@ function sumAo(rows,from,to){
   return records.length?records.reduce((sum,x)=>sum+Number(x.ao||0),0):null;
 }
 
-export async function handlePortalRequest({ req,res,url,supabase,identity,rpc,bodyJson,send,HttpError,storageUpload,theftLeaderboard }){
+export async function handlePortalRequest({ req,res,url,supabase,identity,rpc,bodyJson,send,HttpError,storageUpload,theftLeaderboard,forumAvatar }){
   const path=url.pathname;
   if(!path.startsWith('/api/portal/'))return false;
   if(await handleQuestsRequest({req,res,url,supabase,identity,rpc,bodyJson,send,HttpError}))return true;
@@ -177,6 +177,15 @@ export async function handlePortalRequest({ req,res,url,supabase,identity,rpc,bo
       avatar_url:p.avatar_url|| (p.avatar_path ? avatarBase+p.avatar_path.split('/').map(encodeURIComponent).join('/') : ''),
       role:roleMap.get(p.login.toLowerCase())||null,vk_url:linkMap.get(p.login.toLowerCase())||''})));
     send(res,200,{ok:true,items});return true;
+  }
+  if(req.method==='POST'&&path==='/api/portal/admin/leadership/forum-avatar'){
+    const body=await bodyJson(req,2000),slot=String(body.slot||'');
+    if(!SLOTS.has(slot))throw new HttpError(400,'Неизвестная должность');
+    const profileUrl=clean(body.forum_url,700,HttpError);
+    let result;try{result=await forumAvatar(profileUrl);}catch(error){throw new HttpError([400,404,413,415,502,504].includes(error.status)?error.status:502,error.message||'Не удалось получить аватар форума');}
+    const filename=`leadership/${slot}-${randomBytes(12).toString('hex')}.jpg`;
+    const avatar_url=await storageUpload(filename,result.bytes,result.mime);
+    send(res,200,{ok:true,avatar_url,mime:result.mime,size:result.bytes.length,width:result.width,height:result.height});return true;
   }
   if(req.method==='POST'&&path==='/api/portal/admin/leadership/avatar'){
     const body=await bodyJson(req,430000);
