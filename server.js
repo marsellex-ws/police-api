@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { createTheftLeaderboard } from './theft-leaderboard.js';
 import { handleExamRequest } from './exams-api.js';
 import { handlePortalRequest } from './portal-api.js';
 import { timingSafeEqual, createHash } from 'node:crypto';
@@ -31,6 +32,7 @@ function requiredEnv(env) {
 export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
   const allowedOrigins = new Set([...SITE_ORIGINS, ...(env.ALLOWED_ORIGINS || DEFAULT_ORIGINS.join(',')).split(',').map(x => x.trim()).filter(Boolean)]);
   const attempts = new Map();
+  const theftLeaderboard = createTheftLeaderboard({fetchImpl});
 
   async function supabase(method, path, body, opts = {}) {
     const { url, key } = requiredEnv(env);
@@ -219,7 +221,7 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
       res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
       if (req.method === 'OPTIONS') return send(res, 204, {});
       const url = new URL(req.url, 'http://localhost');
-      if (await handlePortalRequest({ req, res, url, supabase, identity, rpc, bodyJson, send, HttpError, storageUpload })) return;
+      if (await handlePortalRequest({ req, res, url, supabase, identity, rpc, bodyJson, send, HttpError, storageUpload, theftLeaderboard })) return;
       if (await handleExamRequest({ req, res, url, supabase, identity, bodyJson, send, HttpError })) return;
 
       if (req.method === 'GET' && url.pathname === '/health') {

@@ -40,7 +40,7 @@ function sumAo(rows,from,to){
   return records.length?records.reduce((sum,x)=>sum+Number(x.ao||0),0):null;
 }
 
-export async function handlePortalRequest({ req,res,url,supabase,identity,rpc,bodyJson,send,HttpError,storageUpload }){
+export async function handlePortalRequest({ req,res,url,supabase,identity,rpc,bodyJson,send,HttpError,storageUpload,theftLeaderboard }){
   const path=url.pathname;
   if(!path.startsWith('/api/portal/'))return false;
   if(await handleQuestsRequest({req,res,url,supabase,identity,rpc,bodyJson,send,HttpError}))return true;
@@ -50,6 +50,12 @@ export async function handlePortalRequest({ req,res,url,supabase,identity,rpc,bo
     return u;
   };
   const prefixes='/api/portal/admin/';
+  if(req.method==='GET'&&path==='/api/portal/employees/thefts'){
+    try{send(res,200,await theftLeaderboard());}
+    catch(error){console.error('Police theft leaderboard unavailable',error?.name);throw new HttpError(503,'Источник реагирований полиции временно недоступен. Повторите загрузку.');}
+    return true;
+  }
+
   if(req.method==='GET'&&path==='/api/portal/leadership'){
     const items=await supabase('GET','pd_portal_leadership?select=slot,nickname,avatar_url,vk_url,forum_url,gender');
     send(res,200,{ok:true,items});return true;
