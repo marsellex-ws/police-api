@@ -1,3 +1,4 @@
+import {staffNicknameKey} from './staff-profiles.js';
 const SOURCE='https://djoniohanter.com/car_theft/get_arrests.php';
 const WINDOWS={day:86400,week:7*86400,month:30*86400};
 export function aggregatePoliceArrests(records,now=Date.now()){
@@ -8,7 +9,7 @@ export function aggregatePoliceArrests(records,now=Date.now()){
    const name=typeof row?.policeName==='string'?row.policeName.trim():'';
    const timestamp=Number(row?.timestamp);
    if(!name||name.length>100||!Number.isFinite(timestamp)||timestamp<=start||timestamp>end)continue;
-   const key=name.toLocaleLowerCase('en-US');
+   const key=staffNicknameKey(name);
    const item=groups.get(key)||{nickname:name,count:0,reward:0,reward_count:0,last_at:0,events:[]};
    item.count++;const reward=Number(row.reward);
    const knownReward=row.reward!==null&&row.reward!==undefined&&row.reward!==''&&Number.isFinite(reward)&&reward>=0;
@@ -22,7 +23,7 @@ export function aggregatePoliceArrests(records,now=Date.now()){
  }
  return periods;
 }
-export function createTheftLeaderboard({fetchImpl=fetch,now=Date.now}={}){
+export function createTheftLeaderboard({fetchImpl=fetch,now=Date.now,lookupProfiles=async()=>new Map()}={}){
  let cached=null,inflight=null;
  async function refresh(){
   const response=await fetchImpl(SOURCE+'?t='+now(),{headers:{Accept:'application/json',Referer:'https://djoniohanter.com/car_theft/'},signal:AbortSignal.timeout(8000)});
@@ -38,6 +39,14 @@ export function createTheftLeaderboard({fetchImpl=fetch,now=Date.now}={}){
    if(!inflight)inflight=refresh().finally(()=>{inflight=null});
    await inflight;
   }
-  return {ok:true,source:'djoniohanter.com/car_theft',updated_at:new Date(cached.at).toISOString(),periods:aggregatePoliceArrests(cached.records,now())};
+  const periods=aggregatePoliceArrests(cached.records,now());
+  let profiles=new Map(),profiles_available=true;
+  try{profiles=await lookupProfiles([...new Set(Object.values(periods).flatMap(p=>p.items.map(x=>x.nickname)))]);}
+  catch{profiles_available=false;console.warn('Staff profile lookup temporarily unavailable');}
+  for(const period of Object.values(periods))for(const item of period.items){
+   const profile=profiles.get(staffNicknameKey(item.nickname));
+   item.login=profile?.login||null;item.avatar_url=profile?.avatar_url||null;
+  }
+  return {ok:true,source:'djoniohanter.com/car_theft',updated_at:new Date(cached.at).toISOString(),profiles_available,periods};
  };
 }

@@ -1,5 +1,6 @@
 import http from 'node:http';
 import { createTheftLeaderboard } from './theft-leaderboard.js';
+import { createStaffProfileLookup } from './staff-profiles.js';
 import { handleExamRequest } from './exams-api.js';
 import { handlePortalRequest } from './portal-api.js';
 import { timingSafeEqual, createHash } from 'node:crypto';
@@ -32,7 +33,7 @@ function requiredEnv(env) {
 export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
   const allowedOrigins = new Set([...SITE_ORIGINS, ...(env.ALLOWED_ORIGINS || DEFAULT_ORIGINS.join(',')).split(',').map(x => x.trim()).filter(Boolean)]);
   const attempts = new Map();
-  const theftLeaderboard = createTheftLeaderboard({fetchImpl});
+  const theftLeaderboard = createTheftLeaderboard({fetchImpl,lookupProfiles:createStaffProfileLookup({supabase,supabaseUrl:env.SUPABASE_URL?.replace(/\/$/,'')})});
 
   async function supabase(method, path, body, opts = {}) {
     const { url, key } = requiredEnv(env);
