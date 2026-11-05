@@ -15,11 +15,11 @@ test('production CORS survives legacy environment settings and rejects unrelated
   const denied=await fetch(base+'/health',{headers:{Origin:'https://untrusted.example'}});assert.equal(denied.status,403);assert.equal(denied.headers.get('access-control-allow-origin'),null);
  });
 });
-test('Vercel rewrites reach health and nested API handlers while preserving query parameters',async()=>{
+test('Vercel Node entrypoint preserves health and nested API paths without rewrites',async()=>{
  const config=JSON.parse(await readFile(new URL('./vercel.json',import.meta.url),'utf8'));
- assert.deepEqual(config.rewrites,[{source:'/health',destination:'/api/index?__police_path=health'},{source:'/api/:path*',destination:'/api/index?__police_path=api/:path*'}]);
- await run(adapter,async base=>{
-  const health=await fetch(base+'/api/index?__police_path=health&probe=1');assert.equal(health.status,200);assert.equal((await health.json()).service,'police-api');
-  const auth=await fetch(base+'/api/index?__police_path=api/auth/me&probe=1');assert.equal(auth.status,401);assert.equal((await auth.json()).error,'Sign in required');
+ assert.equal(config.rewrites,undefined); // Vercel detects server.js and passes original URLs directly.
+ await run(createApp(),async base=>{
+  const health=await fetch(base+'/health?probe=1');assert.equal(health.status,200);assert.equal((await health.json()).service,'police-api');
+  const auth=await fetch(base+'/api/auth/me?probe=1');assert.equal(auth.status,401);assert.equal((await auth.json()).error,'Sign in required');
  });
 });
