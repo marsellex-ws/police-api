@@ -5,6 +5,7 @@ import { timingSafeEqual, createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 
 const LOGIN_RE = /^[a-z0-9_.-]{3,32}$/;
+const SITE_ORIGINS = ['https://police-department.ru', 'https://www.police-department.ru'];
 const DEFAULT_ORIGINS = ['https://marsellex.ru', 'https://www.marsellex.ru'];
 const PUBLIC_COLUMNS = 'id,department,nickname,account_number,punishment_type,article,reason,evidence_url,issued_by,redemption_type,redemption_proof_url,redemption_proof_label,status,issued_at,paid_at,paid_by,created_at,updated_at,version';
 const DEPARTMENTS = new Set(['LSPD', 'SFPD', 'LVPD']);
@@ -28,7 +29,7 @@ function requiredEnv(env) {
 }
 
 export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
-  const allowedOrigins = new Set((env.ALLOWED_ORIGINS || DEFAULT_ORIGINS.join(',')).split(',').map(x => x.trim()).filter(Boolean));
+  const allowedOrigins = new Set([...SITE_ORIGINS, ...(env.ALLOWED_ORIGINS || DEFAULT_ORIGINS.join(',')).split(',').map(x => x.trim()).filter(Boolean)]);
   const attempts = new Map();
 
   async function supabase(method, path, body, opts = {}) {

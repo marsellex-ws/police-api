@@ -1,4 +1,16 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "regions": ["fra1"]
+  "regions": [
+    "fra1"
+  ],
+  "rewrites": [
+    {
+      "source": "/health",
+      "destination": "/api/index?__police_path=health"
+    },
+    {
+      "source": "/api/:path*",
+      "destination": "/api/index?__police_path=api/:path*"
+    }
+  ]
 }
