@@ -9,12 +9,16 @@ export function aggregatePoliceArrests(records,now=Date.now()){
    const timestamp=Number(row?.timestamp);
    if(!name||name.length>100||!Number.isFinite(timestamp)||timestamp<=start||timestamp>end)continue;
    const key=name.toLocaleLowerCase('en-US');
-   const item=groups.get(key)||{nickname:name,count:0,reward:0,last_at:0};
-   item.count++;const reward=Number(row.reward);if(Number.isFinite(reward)&&reward>=0)item.reward+=reward;
+   const item=groups.get(key)||{nickname:name,count:0,reward:0,reward_count:0,last_at:0,events:[]};
+   item.count++;const reward=Number(row.reward);
+   const knownReward=row.reward!==null&&row.reward!==undefined&&row.reward!==''&&Number.isFinite(reward)&&reward>=0;
+   if(knownReward){item.reward+=reward;item.reward_count++;}
+   item.events.push({timestamp,reward:knownReward?reward:null});
    item.last_at=Math.max(item.last_at,timestamp);groups.set(key,item);
   }
+  for(const item of groups.values()){item.average_reward=item.reward_count?item.reward/item.reward_count:null;item.events.sort((a,b)=>b.timestamp-a.timestamp);}
   const items=[...groups.values()].sort((a,b)=>b.count-a.count||b.reward-a.reward||a.nickname.localeCompare(b.nickname,'en'));
-  periods[period]={from:new Date(start*1000).toISOString(),to:new Date(end*1000).toISOString(),items,total:items.reduce((sum,x)=>sum+x.count,0)};
+  periods[period]={from:new Date(start*1000).toISOString(),to:new Date(end*1000).toISOString(),items,total:items.reduce((sum,x)=>sum+x.count,0),total_reward:items.reduce((sum,x)=>sum+x.reward,0),reward_count:items.reduce((sum,x)=>sum+x.reward_count,0)};
  }
  return periods;
 }

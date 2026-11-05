@@ -7,3 +7,11 @@ test('rolling police-only windows, exact boundaries, nickname grouping and ranki
 test('coalesces reads and refreshes cached source after one minute',async()=>{let n=0,time=now;const load=createTheftLeaderboard({now:()=>time,fetchImpl:async(url,opts)=>{n++;assert.match(url,/get_arrests\.php\?t=/);assert.equal(opts.headers.Referer,'https://djoniohanter.com/car_theft/');return new Response(JSON.stringify(rows));}});const results=await Promise.all([load(),load()]);assert.equal(n,1);assert.deepEqual(results[0],results[1]);await load();assert.equal(n,1);time+=60001;await load();assert.equal(n,2);});
 test('upstream errors and invalid payloads are not fabricated as empty rankings',async()=>{for(const response of [()=>new Response('{}'),()=>new Response('bad'),()=>new Response('blocked',{status:403})]){const load=createTheftLeaderboard({fetchImpl:async()=>response()});await assert.rejects(load());}});
 test('HTTP public leaderboard reaches source without auth or Supabase writes',async()=>{const server=http.createServer(createApp({env:{},fetchImpl:async url=>{assert.match(url,/^https:\/\/djoniohanter.com\/car_theft\/get_arrests.php/);return new Response(JSON.stringify(rows));}}));await new Promise(r=>server.listen(0,'127.0.0.1',r));try{const r=await fetch(`http://127.0.0.1:${server.address().port}/api/portal/employees/thefts`,{headers:{Origin:'https://police-department.ru'}});assert.equal(r.status,200);assert.equal(r.headers.get('access-control-allow-origin'),'https://police-department.ru');assert.equal((await r.json()).ok,true);}finally{await new Promise(r=>server.close(r));}});
+
+test('period payouts and individual events reconcile; missing payouts are not reported as zero',()=>{
+ const data=aggregatePoliceArrests([...rows,{policeName:'Alpha_Cop',timestamp:ts-5,reward:null},{policeName:'Alpha_Cop',timestamp:ts-4,reward:-20}],now).day;
+ assert.equal(data.total_reward,150);assert.equal(data.reward_count,2);
+ const item=data.items[0];assert.equal(item.count,4);assert.equal(item.reward_count,2);assert.equal(item.average_reward,75);assert.equal(item.events.length,4);assert.equal(item.events[0].reward,null);
+ assert.equal(item.events.filter(e=>e.reward!==null).reduce((sum,e)=>sum+e.reward,0),item.reward);
+ assert.ok(item.events.every((e,i,a)=>i===0||a[i-1].timestamp>=e.timestamp));
+});
