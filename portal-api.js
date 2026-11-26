@@ -222,6 +222,17 @@ export async function handlePortalRequest({ req,res,url,supabase,identity,rpc,bo
     await supabase('POST','pd_portal_admin_events',{actor:user.login,target,action:'set_vk'});
     send(res,200,{ok:true,vk_url});return true;
   }
+  if(req.method==='POST'&&path==='/api/portal/admin/leadership/order'){
+    const {slot,neighbor,version}=await bodyJson(req,2048);
+    if(!SLOTS.has(slot)||!SLOTS.has(neighbor)||slot===neighbor||!Number.isSafeInteger(version)||version<1||version>2147483647)
+      throw new HttpError(400,'Некорректный порядок руководства');
+    const result=await rpc('pd_move_leadership_slot',{p_slot:slot,p_neighbor:neighbor,p_version:version,p_actor:user.login});
+    if(result?.conflict){
+      send(res,409,{...result,error:'Порядок уже изменился. Проверьте позиции и повторите.'});return true;
+    }
+    if(result?.ok!==true)throw new HttpError(400,'Можно менять местами соседние карточки в одной линии');
+    send(res,200,result);return true;
+  }
   const leadershipMatch=/^\/api\/portal\/admin\/leadership\/([a-z_]+)$/.exec(path);
   if(req.method==='PUT'&&leadershipMatch){
     const slot=leadershipMatch[1];if(!SLOTS.has(slot))throw new HttpError(404,'Должность не найдена');
