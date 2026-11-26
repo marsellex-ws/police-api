@@ -1,3 +1,4 @@
+import {Buffer} from 'node:buffer';
 import {staffNicknameKey} from './staff-profiles.js';
 const SOURCE='https://djoniohanter.com/car_theft/get_arrests.php';
 const WINDOWS={day:86400,week:7*86400,month:30*86400};
