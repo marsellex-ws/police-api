@@ -5,7 +5,7 @@ import { createApp } from './server.js';
 
 const TOKEN = 'a'.repeat(64);
 const UID = '31bf20da-3c21-401f-a229-12d6cf7a9d33';
-function fakeDatabase() {
+function fakeDatabase({role = 'senior', move} = {}) {
   const records = [];
   const request = async (url, options) => {
     const u = new URL(url);
@@ -16,7 +16,8 @@ function fakeDatabase() {
     else if (path === 'rpc/ws_admin_access_state') response = { ok: 1, login: 'tester', nickname: 'Tester', department: 'LSPD' };
     else if (path === 'rpc/ws_profile_logout') response = { ok: 1 };
     else if (path === 'ws_sessions') response = [{ created_at: new Date().toISOString() }];
-    else if (path === 'pd_ws_roles') response = [{ role: 'senior', department: 'LSPD' }];
+    else if (path === 'pd_ws_roles') response = [{ role, department: 'LSPD' }];
+    else if (path === 'rpc/pd_move_leadership_slot' && move) response = move(body);
     else if (path === 'ws_profiles') response = [];
     else if (path === 'pd_access') response = [{ department: 'LSPD', role: 'editor' }];
     else if (path === 'pd_punishments' && options.method === 'POST') {
@@ -35,10 +36,10 @@ function fakeDatabase() {
   };
   return request;
 }
-async function withApp(fn, overrides = {}) {
+async function withApp(fn, overrides = {}, database = fakeDatabase()) {
   const app = createApp({
     env: { SUPABASE_URL: 'https://example.supabase.co', SUPABASE_SECRET_KEY: 'sb_secret_very_long_TEST_KEY', ALLOWED_ORIGINS: 'https://marsellex.ru', ...overrides },
-    fetchImpl: fakeDatabase()
+    fetchImpl: database
   });
   const server = http.createServer(app);
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -78,3 +79,31 @@ test('reject cross-site writes',async()=>withApp(async base=>{
   const r = await fetch(base+'/api/auth/login',{method:'POST',headers:{Origin:'https://attacker.example','Content-Type':'application/json'},body:JSON.stringify({login:'x',password:'y'})});
   assert.equal(r.status,403);
 }));
+
+
+test('leadership order writes validate privilege, version and the session actor', async () => {
+  const route = '/api/portal/admin/leadership/order';
+  const move = {slot:'swat_commander', neighbor:'swat_deputy', version:1, actor:'untrusted'};
+  await withApp(async base => {
+    assert.equal((await api(base,route,'POST',move))[0],401);
+    assert.equal((await api(base,route,'POST',move,TOKEN))[0],403);
+  });
+
+  const calls = [];
+  const database = fakeDatabase({role:'admin', move: args => {
+    calls.push(args);
+    return calls.length === 1 ? {ok:true,slots:['swat_deputy','swat_commander'],version:2} :
+      {ok:false,conflict:true,slots:['swat_deputy','swat_commander'],version:2};
+  }});
+  await withApp(async base => {
+    assert.equal((await api(base,route,'POST',{...move,version:0},TOKEN))[0],400);
+    assert.equal(calls.length,0);
+    const [status, data] = await api(base,route,'POST',move,TOKEN);
+    assert.equal(status,200);
+    assert.equal(data.version,2);
+    assert.deepEqual(calls[0],{p_slot:move.slot,p_neighbor:move.neighbor,p_version:1,p_actor:'tester'});
+    const [stale, conflict] = await api(base,route,'POST',move,TOKEN);
+    assert.equal(stale,409);
+    assert.deepEqual(conflict.slots,data.slots);
+  },{},database);
+});
