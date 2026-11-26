@@ -1,11 +1,8 @@
-import {Buffer} from 'node:buffer';
+import {fetchTheftSource} from './theft-archive.js';
 import {staffNicknameKey} from './staff-profiles.js';
-const SOURCE='https://djoniohanter.com/car_theft/get_arrests.php';
 const WINDOWS={day:86400,week:7*86400,month:30*86400};
-export function aggregatePoliceArrests(records,now=Date.now()){
- const end=Math.floor(now/1000),periods={};
- for(const [period,seconds] of Object.entries(WINDOWS)){
-  const start=end-seconds,groups=new Map();
+function aggregatePeriod(records,start,end){
+  const groups=new Map();
   for(const row of records){
    const name=typeof row?.policeName==='string'?row.policeName.trim():'';
    const timestamp=Number(row?.timestamp);
@@ -20,18 +17,33 @@ export function aggregatePoliceArrests(records,now=Date.now()){
   }
   for(const item of groups.values()){item.average_reward=item.reward_count?item.reward/item.reward_count:null;item.events.sort((a,b)=>b.timestamp-a.timestamp);}
   const items=[...groups.values()].sort((a,b)=>b.count-a.count||b.reward-a.reward||a.nickname.localeCompare(b.nickname,'en'));
-  periods[period]={from:new Date(start*1000).toISOString(),to:new Date(end*1000).toISOString(),items,total:items.reduce((sum,x)=>sum+x.count,0),total_reward:items.reduce((sum,x)=>sum+x.reward,0),reward_count:items.reduce((sum,x)=>sum+x.reward_count,0)};
- }
- return periods;
+  return {from:new Date(start*1000).toISOString(),to:new Date(end*1000).toISOString(),items,total:items.reduce((sum,x)=>sum+x.count,0),total_reward:items.reduce((sum,x)=>sum+x.reward,0),reward_count:items.reduce((sum,x)=>sum+x.reward_count,0)};
 }
-export function createTheftLeaderboard({fetchImpl=fetch,now=Date.now,lookupProfiles=async()=>new Map()}={}){
+export function aggregatePoliceArrests(records,now=Date.now()){
+ const end=Math.floor(now/1000);
+ return Object.fromEntries(Object.entries(WINDOWS).map(([period,seconds])=>[period,aggregatePeriod(records,end-seconds,end)]));
+}
+export function aggregatePoliceWeeks(records, now=Date.now()){
+ const groups=new Map(), end=Math.floor(now/1000);
+ for(const row of records){
+  const timestamp=Number(row?.timestamp);
+  if(!Number.isFinite(timestamp)||timestamp<=0||timestamp>end)continue;
+  // Moscow is UTC+3. Day zero was Thursday, three days after Monday.
+  const day=Math.floor((timestamp+10800)/86400);
+  const monday=(day-((day+3)%7))*86400-10800;
+  if(!groups.has(monday))groups.set(monday,[]);
+  groups.get(monday).push(row);
+ }
+ return [...groups].sort(([a],[b])=>b-a).map(([monday,rows])=>({
+  ...aggregatePeriod(rows,monday-1,monday+7*86400-1),
+  from:new Date(monday*1000).toISOString(),
+  to:new Date((monday+7*86400-1)*1000).toISOString()
+ }));
+}
+export function createTheftLeaderboard({fetchImpl=fetch,now=Date.now,lookupProfiles=async()=>new Map(),includeWeeks=false}={}){
  let cached=null,inflight=null;
  async function refresh(){
-  const response=await fetchImpl(SOURCE+'?t='+now(),{headers:{Accept:'application/json',Referer:'https://djoniohanter.com/car_theft/'},signal:AbortSignal.timeout(8000)});
-  if(!response.ok)throw Error('Upstream HTTP '+response.status);
-  const reader=response.body.getReader();let size=0;const chunks=[];
-  try{while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>2*1024*1024)throw Error('Upstream response too large');chunks.push(value)}}catch(error){await reader.cancel().catch(()=>{});throw error}
-  const records=JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  const records=await fetchTheftSource('get_arrests.php',2*1024*1024,fetchImpl,now,8000);
   if(!Array.isArray(records)||records.length>100000)throw Error('Invalid police archive');
   cached={records,at:now()};return cached;
  }
@@ -40,14 +52,16 @@ export function createTheftLeaderboard({fetchImpl=fetch,now=Date.now,lookupProfi
    if(!inflight)inflight=refresh().finally(()=>{inflight=null});
    await inflight;
   }
-  const periods=aggregatePoliceArrests(cached.records,now());
+  const asOf=now();
+  const periods=aggregatePoliceArrests(cached.records,asOf);
+  const weeks=includeWeeks?aggregatePoliceWeeks(cached.records,asOf):[];
   let profiles=new Map(),profiles_available=true;
-  try{profiles=await lookupProfiles([...new Set(Object.values(periods).flatMap(p=>p.items.map(x=>x.nickname)))]);}
+  try{profiles=await lookupProfiles([...new Set([...Object.values(periods),...weeks.slice(0,5)].flatMap(p=>p.items.map(x=>x.nickname)))]);}
   catch{profiles_available=false;console.warn('Staff profile lookup temporarily unavailable');}
-  for(const period of Object.values(periods))for(const item of period.items){
+  for(const period of [...Object.values(periods),...weeks])for(const item of period.items){
    const profile=profiles.get(staffNicknameKey(item.nickname));
    item.login=profile?.login||null;item.avatar_url=profile?.avatar_url||null;
   }
-  return {ok:true,source:'djoniohanter.com/car_theft',updated_at:new Date(cached.at).toISOString(),profiles_available,periods};
+  return {ok:true,source:'djoniohanter.com/car_theft',updated_at:new Date(cached.at).toISOString(),profiles_available,periods,...(includeWeeks?{weeks}:{})};
  };
 }
