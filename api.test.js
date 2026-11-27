@@ -5,7 +5,7 @@ import { createApp } from './server.js';
 
 const TOKEN = 'a'.repeat(64);
 const UID = '31bf20da-3c21-401f-a229-12d6cf7a9d33';
-function fakeDatabase({role = 'senior', move, saveChief} = {}) {
+function fakeDatabase({role = 'senior', move, saveChief, saveHandbook} = {}) {
   const records = [];
   const request = async (url, options) => {
     const u = new URL(url);
@@ -19,6 +19,7 @@ function fakeDatabase({role = 'senior', move, saveChief} = {}) {
     else if (path === 'pd_ws_roles') response = [{ role, department: 'LSPD' }];
     else if (path === 'rpc/pd_move_leadership_slot' && move) response = move(body);
     else if (path === 'rpc/pd_save_leadership_chief' && saveChief) response = saveChief(body);
+    else if (path === 'pd_handbook_sections' && options.method === 'PATCH' && saveHandbook) response = saveHandbook(u,body,options.headers);
     else if (path === 'ws_profiles') response = [];
     else if (path === 'pd_access') response = [{ department: 'LSPD', role: 'editor' }];
     else if (path === 'pd_punishments' && options.method === 'POST') {
@@ -135,5 +136,41 @@ test('chief leadership writes persist identity and appointment together with the
       p_forum_url:'',p_gender:'male',p_account_number:'99881',p_appointed_on:'2026-10-21',p_actor:'tester'});
     assert.equal((await api(base,route,'PUT',{...body,appointed_on:null},TOKEN))[0],200);
     assert.equal(calls.at(-1).p_appointed_on,null);
+  },{},database);
+});
+
+test('handbook writes require an administrator and sanitize formatting before versioned publication', async () => {
+  const route = '/api/portal/admin/handbook/upd';
+  const body = {title:'УПД',version:1,body_html:
+    '<details open><summary>Скрытый текст</summary><h3>Глава</h3>' +
+    '<p onclick="alert(1)" style="text-align:center;position:fixed">' +
+    '<span class="handbook-tab">\t</span><strong>Пункт</strong><a href="#ak">АК</a>' +
+    '<a href="javascript:alert(1)">Ссылка</a><img src="https://example.org/logo.png" onerror="alert(1)">' +
+    '</p><iframe src="https://example.org/embed/1"></iframe>' +
+    '<iframe src="https://www.youtube.com/embed/1"></iframe><script>alert(1)</script></details>'};
+  await withApp(async base => {
+    assert.equal((await api(base,route,'PUT',body))[0],401);
+    assert.equal((await api(base,route,'PUT',body,TOKEN))[0],403);
+  });
+  let version = 1;
+  const database = fakeDatabase({role:'admin',saveHandbook:(url,update,headers) => {
+    assert.equal(url.searchParams.get('slug'),'eq.upd');
+    assert.equal(headers.Prefer,'return=representation');
+    if (url.searchParams.get('version') !== 'eq.' + version) return [];
+    version++;
+    return [{slug:'upd',...update}];
+  }});
+  await withApp(async base => {
+    assert.equal((await api(base,route,'PUT',{...body,version:0},TOKEN))[0],400);
+    assert.equal((await api(base,route,'PUT',{...body,body_html:'<script>1</script>'},TOKEN))[0],400);
+    const [status,data] = await api(base,route,'PUT',body,TOKEN);
+    assert.equal(status,200);
+    assert.equal(data.section.version,2);
+    const sanitized = data.section.body_html;
+    assert.match(sanitized,/<details><summary>Скрытый текст<\/summary><h3>Глава<\/h3>/);
+    assert.match(sanitized,/<p style="text-align:center"><span class="handbook-tab">\t<\/span><strong>Пункт<\/strong><a href="#ak"/);
+    assert.match(sanitized,/<iframe src="https:\/\/www\.youtube\.com\/embed\/1"/);
+    assert.doesNotMatch(sanitized,/position:fixed|onerror|onclick|javascript:|<script|example\.org\/embed/);
+    assert.equal((await api(base,route,'PUT',body,TOKEN))[0],409);
   },{},database);
 });

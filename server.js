@@ -227,7 +227,7 @@ export function createApp({ env = process.env, fetchImpl = fetch } = {}) {
       if (await handleExamRequest({ req, res, url, supabase, identity, bodyJson, send, HttpError })) return;
 
       if (req.method === 'GET' && url.pathname === '/health') {
-        return send(res, 200, { ok: true, service: 'police-api', database_configured: Boolean(env.SUPABASE_SECRET_KEY && env.SUPABASE_URL), features: { forum_avatar_import: true, leadership_order: true, chief_leadership_edit: true } });
+        return send(res, 200, { ok: true, service: 'police-api', database_configured: Boolean(env.SUPABASE_SECRET_KEY && env.SUPABASE_URL), features: { forum_avatar_import: true, leadership_order: true, chief_leadership_edit: true, handbook_edit: true } });
       }
 
       if (req.method === 'POST' && url.pathname === '/api/auth/register') {
