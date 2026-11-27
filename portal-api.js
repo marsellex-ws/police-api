@@ -1,6 +1,7 @@
 // Police Department portal / staff administration. All mutations require an authenticated admin/developer.
 import { randomBytes } from 'node:crypto';
 import { handleQuestsRequest } from './quests-api.js';
+import { cleanHandbookHtml, handbookSlug, handbookBodyLimit } from './handbook-html.js';
 
 const LOGIN = /^[a-z0-9_.-]{3,32}$/i;
 const DEPTS = new Set(['LSPD','SFPD','LVPD']);
@@ -94,6 +95,28 @@ export async function handlePortalRequest({ req,res,url,supabase,identity,rpc,bo
   }
   if(!path.startsWith(prefixes))throw new HttpError(404,'Раздел не найден');
   const user=await admin();
+  const handbookPath='/api/portal/admin/handbook/';
+  if(req.method==='PUT'&&path.startsWith(handbookPath)){
+    const slug=path.slice(handbookPath.length);
+    if(!handbookSlug.test(slug))throw new HttpError(400,'Некорректный раздел справочника');
+    const body=await bodyJson(req,handbookBodyLimit*2+2048);
+    const title=clean(body.title,120,HttpError);
+    if(!title||typeof body.body_html!=='string'||Buffer.byteLength(body.body_html)>handbookBodyLimit||
+       !Number.isInteger(body.version)||body.version<1||body.version>=2147483647)
+      throw new HttpError(400,'Проверьте заголовок, содержимое и версию раздела');
+    const bodyHtml=cleanHandbookHtml(body.body_html);
+    if(!bodyHtml||Buffer.byteLength(bodyHtml)>handbookBodyLimit)
+      throw new HttpError(400,'Раздел пуст или превышает допустимый размер');
+    const query=new URLSearchParams({
+      slug:'eq.'+slug,version:'eq.'+body.version,select:'slug,title,body_html,version'
+    });
+    const updated=await supabase('PATCH','pd_handbook_sections?'+query,{
+      title,body_html:bodyHtml,version:body.version+1,updated_at:new Date().toISOString()
+    },{prefer:'return=representation'});
+    if(!updated?.length)throw new HttpError(409,'Раздел уже изменился. Скопируйте свои правки и загрузите актуальную версию.');
+    res.setHeader('Cache-Control','no-store');
+    send(res,200,{ok:true,section:updated[0]});return true;
+  }
   // Admin-only range catalog + settings. No database credentials are ever sent to clients.
   const rangeRoot='/api/portal/admin/range';
   const rangeFields=['name','tier','hp','armor','icon','image_url','is_enabled','sort_order'];
