@@ -93,7 +93,8 @@ sections.forEach(([comment, slug, title], order) => {
         number++;
         chapter = $('<details class="handbook-chapter">');
         chapter.append($('<summary>').text('Скрытый текст'));
-        chapter.append($('<h3>').append(item.contents()));
+        const heading = $('<h3>').text('Глава ' + item.text().trim().replace(/^(\d+)\.\s+/, '$1. '));
+        item.before(heading);
         item.replaceWith(chapter);
       } else if (chapter) {
         chapter.append(item);
