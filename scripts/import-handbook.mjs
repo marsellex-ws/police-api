@@ -38,10 +38,10 @@ function post(comment) {
 
 function link(href) {
   const url = new URL(href, forum);
-  const comment = url.hash.match(/^#comment-(\d+)$/)?.[1];
-  if (comment && slugs.has(comment) && (href.startsWith('#') || url.search.includes('/topic/' + topic))) {
-    return '#' + slugs.get(comment);
-  }
+  const sameTopic = url.origin === new URL(forum).origin && url.search.includes('/topic/' + topic + '-');
+  const comment = url.hash.match(/^#(?:comment|findComment)-(\d+)$/i)?.[1] || url.searchParams.get('comment');
+  if (comment && slugs.has(comment) && (href.startsWith('#') || sameTopic)) return '#' + slugs.get(comment);
+  if (sameTopic && !comment && !url.hash) return '#handbookContents';
   return url.href;
 }
 
@@ -108,5 +108,5 @@ sections.forEach(([comment, slug, title], order) => {
   if (!sameCount || checked('details').length !== expectedSpoilers) throw Error(`Lost content in ${slug}`);
   rows.push({slug, title, sort_order: order + 1, body_html: html});
 });
-writeFileSync(output, JSON.stringify(rows));
+writeFileSync(output, '[\n' + rows.map(row => '  ' + JSON.stringify(row)).join(',\n') + '\n]\n');
 console.log(`Imported ${rows.length - 1} forum posts and ${resourceNames.length} resources.`);
