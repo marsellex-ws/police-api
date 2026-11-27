@@ -240,6 +240,22 @@ export async function handlePortalRequest({ req,res,url,supabase,identity,rpc,bo
     const nickname=clean(body.nickname,64,HttpError),avatar_url=httpsUrl(body.avatar_url,700,HttpError);
     const vk_url=vkUrl(body.vk_url,HttpError),forum_url=httpsUrl(body.forum_url||'',700,HttpError);
     const gender=body.gender;if(!['male','female'].includes(gender))throw new HttpError(400,'Неверное обращение');
+    if(Object.hasOwn(body,'account_number')||Object.hasOwn(body,'appointed_on')){
+      if(!['leader_lspd','leader_sfpd','leader_lvpd'].includes(slot))throw new HttpError(400,'Поля срока доступны лидерам ЛС, СФ и ЛВ');
+      const account=clean(body.account_number,20,HttpError);
+      if(account&&!/^\d{1,20}$/.test(account))throw new HttpError(400,'Номер аккаунта должен содержать цифры');
+      const appointed=body.appointed_on;
+      if(appointed!==null&&(!/^\d{4}-\d{2}-\d{2}$/.test(appointed||'')||
+        !Number.isFinite(Date.parse(appointed+'T12:00:00Z'))||isoDate(new Date(appointed+'T12:00:00Z'))!==appointed||
+        appointed>activityCalendar().today))
+        throw new HttpError(400,'Укажите корректную дату назначения');
+      if(appointed&&!nickname)throw new HttpError(400,'Для сохранения срока укажите ник шефа');
+      const result=await rpc('pd_save_leadership_chief',{
+        p_slot:slot,p_nickname:nickname,p_avatar_url:avatar_url,p_vk_url:vk_url,p_forum_url:forum_url,
+        p_gender:gender,p_account_number:account,p_appointed_on:appointed,p_actor:user.login
+      });
+      send(res,200,result);return true;
+    }
     const record={nickname,avatar_url,vk_url,forum_url,gender,updated_by:user.login,updated_at:new Date().toISOString()};
     const items=await supabase('PATCH',`pd_portal_leadership?${new URLSearchParams({slot:`eq.${slot}`,select:'slot,nickname,avatar_url,vk_url,forum_url,gender'})}`,record,{prefer:'return=representation'});
     if(!items?.[0])throw new HttpError(404,'Должность не найдена');

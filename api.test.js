@@ -5,7 +5,7 @@ import { createApp } from './server.js';
 
 const TOKEN = 'a'.repeat(64);
 const UID = '31bf20da-3c21-401f-a229-12d6cf7a9d33';
-function fakeDatabase({role = 'senior', move} = {}) {
+function fakeDatabase({role = 'senior', move, saveChief} = {}) {
   const records = [];
   const request = async (url, options) => {
     const u = new URL(url);
@@ -18,6 +18,7 @@ function fakeDatabase({role = 'senior', move} = {}) {
     else if (path === 'ws_sessions') response = [{ created_at: new Date().toISOString() }];
     else if (path === 'pd_ws_roles') response = [{ role, department: 'LSPD' }];
     else if (path === 'rpc/pd_move_leadership_slot' && move) response = move(body);
+    else if (path === 'rpc/pd_save_leadership_chief' && saveChief) response = saveChief(body);
     else if (path === 'ws_profiles') response = [];
     else if (path === 'pd_access') response = [{ department: 'LSPD', role: 'editor' }];
     else if (path === 'pd_punishments' && options.method === 'POST') {
@@ -105,5 +106,34 @@ test('leadership order writes validate privilege, version and the session actor'
     const [stale, conflict] = await api(base,route,'POST',move,TOKEN);
     assert.equal(stale,409);
     assert.deepEqual(conflict.slots,data.slots);
+  },{},database);
+});
+
+
+test('chief leadership writes persist identity and appointment together with the session actor', async () => {
+  const route = '/api/portal/admin/leadership/leader_sfpd';
+  const body = {nickname:'Officer_Test',avatar_url:'',vk_url:'',forum_url:'',gender:'male',
+    account_number:'99881',appointed_on:'2026-10-21',actor:'ignored'};
+  await withApp(async base => {
+    assert.equal((await api(base,route,'PUT',body))[0],401);
+    assert.equal((await api(base,route,'PUT',body,TOKEN))[0],403);
+  });
+  const calls = [];
+  const database = fakeDatabase({role:'admin',saveChief:args=>{
+    calls.push(args);
+    return {ok:true,item:{slot:args.p_slot},chief:{appointed_on:args.p_appointed_on}};
+  }});
+  await withApp(async base => {
+    assert.equal((await api(base,route,'PUT',{...body,appointed_on:'2026-02-30'},TOKEN))[0],400);
+    assert.equal((await api(base,route,'PUT',{...body,account_number:'invalid'},TOKEN))[0],400);
+    assert.equal((await api(base,'/api/portal/admin/leadership/minister','PUT',body,TOKEN))[0],400);
+    assert.equal(calls.length,0);
+    const [status,result] = await api(base,route,'PUT',body,TOKEN);
+    assert.equal(status,200);
+    assert.equal(result.chief.appointed_on,body.appointed_on);
+    assert.deepEqual(calls[0],{p_slot:'leader_sfpd',p_nickname:body.nickname,p_avatar_url:'',p_vk_url:'',
+      p_forum_url:'',p_gender:'male',p_account_number:'99881',p_appointed_on:'2026-10-21',p_actor:'tester'});
+    assert.equal((await api(base,route,'PUT',{...body,appointed_on:null},TOKEN))[0],200);
+    assert.equal(calls.at(-1).p_appointed_on,null);
   },{},database);
 });
